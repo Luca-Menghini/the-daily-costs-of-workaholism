@@ -4,7 +4,7 @@ The present repository includes some of the supplementary materials of the artic
 
 Menghini, L., & Balducci, C. The daily costs of workaholism: A within-individual investigation on blood pressure, emotional exhaustion, and sleep disturbances. Accepted for publication in the Journal of Occupational Health Psychology.
 
-The present Github repository is associated with the **[Open Science Framework (OSF) repository [osf.io/awbxj/](https://osf.io/awbxj/)**. Here, we included the R code and the corresponding output for data pre-processing, psychometrics, descriptives, and data analysis, whereas the remaining supplementary materials (including the data used in the study) are available from the OSF repository linked above.
+The present Github repository is associated with the **[Open Science Framework (OSF) repository osf.io/awbxj/](https://osf.io/awbxj/)**. Here, we included the R code and the corresponding output for data pre-processing, psychometrics, descriptives, and data analysis, whereas the remaining supplementary materials (including the data used in the study) are available from the OSF repository linked above.
 
 Below, we list and describe the full set of supplementary materials. Click on the highlighted link to visualize the reports.
 
