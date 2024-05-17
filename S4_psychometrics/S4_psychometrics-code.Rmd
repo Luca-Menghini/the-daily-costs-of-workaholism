@@ -1,0 +1,1737 @@
+---
+title: "The daily costs of workaholism"
+subtitle: "Supplementary material S4: Psychometrics and data reduction"
+author:  "Luca Menghini, Ph.D., Cristian Balducci, Ph.D."
+date: "`r Sys.Date()`"
+bibliography: [packagesPsych.bib]
+nocite: '@*'
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    css: styles.css
+    code_download: true
+  pdf_document: default
+  word_document: default
+  theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<br>
+
+# Aims and content
+
+The present document includes the analytical steps to analyze the psychometric properties of the diary data collected with the Qualtrics platform (Qualtrics, Seattle, WA, USA) and pre-processed as shown in  [Supplementary Material S3](https://Luca-Menghini.github.io/the-daily-costs-of-workaholism/S3_preProcessing/S3_data-processing-code-and-output.html), and to compute the corresponding aggregate scores.
+
+Here, we remove all objects from the R global environment.
+```{r  }
+# removing all objets from the workspace
+rm(list=ls())
+```
+
+The following R packages are used in this document (see [References](#ref) section):
+```{r  }
+# required packages
+packages <- c("ggplot2","reshape2","psych","MVN","Rmisc","lavaan","lme4","MuMIn")
+
+# generate packages references
+knitr::write_bib(c(.packages(), packages),"packagesPsych.bib")
+
+# # run to install missing packages
+# xfun::pkg_attach2(packages, message = FALSE); rm(list=ls())
+```
+
+<br>
+
+# 1. Data reading
+
+First, we read the **daily diary** `diary` datasets pre-processed as shown in  [Supplementary Material S3](https://Luca-Menghini.github.io/the-daily-costs-of-workaholism/S3_preProcessing/S3_data-processing-code-and-output.html).
+```{r  }
+# loading data
+load("DATI/diary_processed.RData") 
+
+# sample size
+cat("diary:",nrow(diary),"responses from",nlevels(diary$ID),"participants")
+```
+
+<br>
+
+# 2. Psychometrics
+
+The considered scales among those included in the daily diaries are:
+
+- The 6 **Workaholism** `WHLSM` items adapted from the Italian version of the Dutch Work Addiction Questionnaire ([Balducci et al., 2017](#ref); [Schaufeli et al., 2009](#ref)).
+
+- The 4 **Emotional Exhaustion** `EE` items adapted from the Italian version of the Copenhagen Burnout Inventory ([(Avanzi et al., 2013](#ref); [Kristensen et al., 2005](#ref))
+
+- the 3 **Psychological Detachment** `PD` items adapted from the Italian version of the Recovery Experiences Questionnaire (([Sonnentag & Fritz, 2007](#ref); [Zito et al., 2013](#ref)).
+
+- the 4 **Sleep Disturbances** `SD` items adapted from the Mini Sleep Questionnaire ([Natale et al., 2014](#ref))
+
+As pre-registered [here](https://osf.io/h9zvq), the construct validity of the considered scales is evaluated by conducting a separate **Multilevel Confirmatory Factor Analyse**s (MCFAs) for each scale, following [Kim et al 2016](#ref), and using the `lavaan` R package [(Rosseel, 2012)](#ref).
+
+The following packages and functions are used to optimize the analyses:
+```{r warning=FALSE,message=FALSE}
+library(lavaan); library(lme4); library(Rmisc)
+```
+
+<details><summary>`item.desc()`</summary>
+<p>
+```{r }
+item.desc <- function(data,vars,output="text",digits=2,multilevel=FALSE){ require(lme4); library(MVN)
+  
+  res <- data.frame(item=NA,icc=NA)
+  for(i in 1:length(vars)){
+    # LMER with random effects only
+    m <- lmer(formula=gsub("d1",vars[i],"d1~(1|ID)"),data=data) # VAR_between / (VAR_between + VAR_within)
+    out <- round(as.data.frame(VarCorr(m))[1,4]/(as.data.frame(VarCorr(m))[1,4]+as.data.frame(VarCorr(m))[2,4]),digits)
+    
+    # textual output or data.frame
+    if(output=="text"){cat(vars[i],"ICC =",out,"\n")
+    }else{ res <- rbind(res,cbind(item=vars[i],icc=out)) }} 
+  if(output!="text"){ return(res) }
+  
+  # plotting item scores distributions
+  mvn(data = data[,vars], univariatePlot = "histogram")[4] 
+  
+  # plotting cluster mean (.cm) and mean-centered (.mc) distributions
+  if(multilevel==TRUE){ wide <- data.frame(ID=data[!duplicated(data$ID),"ID"]) # creating wide form dataset
+    # computing and plotting cluster means (.cm)
+    for(Var in vars){ wide <- plyr::join(wide,summarySE(data,Var,"ID",na.rm=TRUE)[,c(1,3)],by="ID",type="left")} # mean scores
+    cat("\nPlotting distributions of cluster means, N =",nrow(na.omit(wide)))
+    colnames(wide)[2:ncol(wide)] <- paste(colnames(wide)[2:ncol(wide)],"cm",sep=".")
+    data <- plyr::join(data,wide,by="ID",type="left") # joining cluster means to the long-form dataset
+    mvn(data = wide[,paste(vars,"cm",sep=".")], univariatePlot = "histogram")[4]
+    # computing and plotting mean-centered (.mc) scores
+    for(Var in vars){ data[,paste(Var,"mc",sep=".")] <- data[,Var] - data[,paste(Var,"cm",sep=".")] }
+    cat("\nPlotting distributions of mean-centered scores, N =",nrow(na.omit(data[,paste(vars,"mc",sep=".")])))
+    mvn(data = data[,paste(vars,"mc",sep=".")], univariatePlot = "histogram")[4]} 
+  }
+```
+</p>
+</details>
+
+computes items ICCs from a random-intercept model, and plots items scores distributions (histograms and qqplots)
+
+<details><summary>`corr.matrices()`</summary>
+<p>
+```{r }
+corr.matrices <- function(data=data,text=TRUE,vars,cluster="ID"){ require(ggplot2); require(Rmisc); require(reshape2)
+  
+  # computing cluster means (.cm)
+  wide <- data.frame(ID=data[!duplicated(data$ID),"ID"]) # creating wide form dataset
+  for(Var in vars){ wide <- plyr::join(wide,summarySE(data,Var,"ID",na.rm=TRUE)[,c(1,3)],by="ID",type="left") } # mean scores
+  colnames(wide)[2:ncol(wide)] <- paste(colnames(wide)[2:ncol(wide)],"cm",sep=".")
+  data <- plyr::join(data,wide,by="ID",type="left") # joining cluster means to the long-form dataset
+  
+  # computing mean-centered (.mc) values
+  for(Var in vars){ data[,paste(Var,"mc",sep=".")] <- data[,Var] - data[,paste(Var,"cm",sep=".")] }
+  
+  # selecting variables
+  vars.b <- paste(vars,"cm",sep=".") # between (.cm)
+  vars.w <- paste(vars,"mc",sep=".") # within (.mc)
+  
+  # plotting matrix 1 (all scores as independent)
+  p1 <- ggplot(melt(cor(data[,vars],data[,vars],use="complete.obs",method="pearson")),aes(x=Var1, y=Var2, fill=value)) + 
+    geom_tile() + 
+    ggtitle(paste("Corr Matrix 1: all independent, N =",nrow(na.omit(data[,vars]))))+labs(x="",y="")+
+    scale_fill_gradient2(low="darkblue",high="#f03b20",mid="white",midpoint=0,limit = c(-1,1), space = "Lab",
+                         name="Pearson\nCorrelation",guide="legend",breaks=round(seq(1,-1,length.out = 11),2),
+                         minor_breaks=round(seq(1,-1,length.out = 11),2))
+  if(text==TRUE){ p1 <- p1 + geom_text(aes(x = Var1, y = Var2, label = round(value,2)),color="black",size=3.5)}
+  
+  # Matrix 2 (cluster means)
+  p2 <- ggplot(melt(cor(wide[,vars.b],wide[,vars.b],use="complete.obs",method="pearson")),aes(x=Var1, y=Var2, fill=value)) +
+    geom_tile() +
+    ggtitle(paste("Corr Matrix 2: cluster means, N =",nrow(wide)))+labs(x="",y="")+
+    scale_fill_gradient2(low="darkblue",high="#f03b20",mid="white",midpoint=0,limit = c(-1,1), space = "Lab",
+                         name="Pearson\nCorrelation",guide="legend",breaks=round(seq(1,-1,length.out = 11),2),
+                         minor_breaks=round(seq(1,-1,length.out = 11),2))
+  if(text==TRUE){ p2 <- p2 + geom_text(aes(x = Var1, y = Var2, label = round(value,2)),color="black",size=3.5)}
+  
+  # Matrix 3 (deviations from individual means)
+  p3 <- ggplot(data = melt(cor(data[,vars.w],data[,vars.w],use="complete.obs",method="pearson")),aes(x=Var1, y=Var2, fill=value)) + 
+    geom_tile() + 
+    ggtitle(paste("Corr Matrix 3: mean-centered, N =",nrow(na.omit(data[,vars.w]))))+labs(x="",y="")+
+    scale_fill_gradient2(low="darkblue",high="#f03b20",mid="white",midpoint=0,limit = c(-1,1), space = "Lab",
+                         name="Pearson\nCorrelation",guide="legend",breaks=round(seq(1,-1,length.out = 11),2),
+                         minor_breaks=round(seq(1,-1,length.out = 11),2))
+  if(text==TRUE){ p3 <- p3 + geom_text(aes(x = Var1, y = Var2, label = round(value,2)),color="black",size=3.5)}
+  return(list(p1,p2,p3))}
+```
+</p>
+</details>
+
+visualizes the correlation matrices computed from the whole data points (all treated as independent), from the average scores (between-individuals) and from the mean-centered scores (within-individual).
+
+<details><summary>`loadings()`</summary>
+<p>
+```{r }
+#' @title Summarizing standardized loadings from a multilevel CFA model
+#' @param model = multilevel CFA model.
+#' @param st = Character indicating the standardization level of loadings: "st.all" or "st.lv".
+loadings <- function(model=NA,st="st.all"){ require(lavaan)
+  if(st=="st.all"){ LOADs <- standardizedsolution(model)
+  } else if(st=="st.lv"){ LOADs <- standardizedsolution(model,type="st.lv")
+  } else{ LOADs <- parameterestimates(model) }
+  return(LOADs[LOADs$op=="=~",])}
+```
+</p>
+</details>
+
+Print the standardized factor loadings of an ordinary or a multilevel CFA model.
+
+<details><summary>`fit.ind()`</summary>
+<p>
+```{r }
+fit.ind <- function(model=NA,from_summary=FALSE,type="multilevel",models.names=NA,
+                    fits=c("npar","chisq","df","rmsea","cfi","srmr_within","srmr_between"),robust=FALSE,
+                    infocrit=TRUE,digits=3){ 
+  require(lavaan); require(MuMIn)
+  
+  # removing level-specific fit indices when model is "monolevel"
+  if(type=="monolevel"){
+      fits <- gsub("srmr_within","srmr",fits)
+      fits <- fits[fits!="srmr_between"] }
+  
+  # robust fit indices
+  if(robust==TRUE){ fits <- gsub("rmsea","rmsea.robust",
+                                 gsub("cfi","cfi.robust",
+                                      gsub("chisq","chisq.scaled",
+                                           gsub("df","df.scaled",fits)))) }
+  
+  # returning dataframe of models fit indices when more than one model is considered
+  if(from_summary==FALSE){
+    if(length(model)>1){
+      fit.indices <- fitmeasures(model[[1]])[fits]
+      for(i in 2:length(model)){
+        fit.indices <- rbind(fit.indices,fitmeasures(model[[i]])[fits]) }
+      if(infocrit==TRUE){ 
+        fit.indices <- cbind(fit.indices,
+                             AICw=Weights(sapply(model,AIC)),BICw=Weights(sapply(model,BIC)))  }
+      if(!is.na(models.names[1])){ row.names(fit.indices) <- models.names }
+      fit.indices <- round(as.data.frame(fit.indices),digits)
+      return(as.data.frame(fit.indices))
+      } else { return(fitmeasures(model)[fits]) }
+    
+    } else { # in some cases the fit indices are available only from the model's summary 
+      quiet <- function(fit) { # this was written by Alicia FRANCO MARTÍNEZ on the lavaan Google group
+        sink(tempfile())
+        on.exit(sink()) 
+        invisible(summary(fit, standardized = TRUE, fit.measures=TRUE)) } 
+      sum <- quiet(model)
+      fit.indices <- sum$FIT[fits]
+      return(fit.indices)}}
+```
+</p>
+</details>
+
+Prints fit indices of one or more CFA models. According to the criteria proposed by [Hu and Bentler (1999)](#ref), we consider RMSEA ≤ .06, CFI ≥ .95, and SRMR ≤ .08 as indicative of adequate fit.
+
+<details><summary>`MCFArel()`</summary>
+<p>
+```{r }
+MCFArel <- function(fit,level,items,item.labels){ require(lavaan)
+  if(level==1){ 
+    sl <- standardizedsolution(fit)[1:(nrow(standardizedSolution(fit))/2),] # pars within
+  } else if(level==2){ 
+    sl <- standardizedsolution(fit)[(nrow(standardizedSolution(fit))/2):nrow(standardizedsolution(fit)),] # pars between
+  } else { stop("Error: level can be either 1 or 2") }
+  sl <- sl$est.std[sl$op == "=~"][items] # standardized loadings of the selected items
+  names(sl) <- item.labels # item names
+  re <- 1 - sl^2 # residual variances of items
+  
+  # composite reliability index
+  omega <- sum(sl)^2 / (sum(sl)^2 + sum(re)) 
+  return(round(omega,2))}
+```
+</p>
+</details>
+
+Computes level-specific indices of composite reliability from a MCFA model, i.e., McDonald omega using level-1 and level-2 standardized factor loadings, respectively (see [Geldhof et al., 2014](#ref)).
+
+<br>
+
+## 2.1. Workaholism
+
+Both mono- and multi-factor structures are specified and compared for the six **state workaholism** `WHLSM` items by assuming either a single `WHLSM` dimension or a two-factor model with the Working Excessively `WE` and the Working Compulsively `WC` dimensions, respectively.
+```{r }
+# selecting WHLSM items
+(WHLSM <- paste("WHLSM",1:6,sep=""))
+
+# Working Compulsively
+WC <- WHLSM[c(1,3,5)]
+
+# Working Excessively
+WE <- WHLSM[c(2,4,6)]
+```
+
+<br>
+
+### 2.1.1. Item description
+
+Here, we inspect the distribution and intraclass correlations (ICC) of `WHLSM` items. ICCs range from .44 to .57, indexing an overall balance between inter- and intra-individual variability. Overall, item scores show a rather **skewed** (items 3, 5, 5), partially skewed (items 2 and 4) or uniform distribution. A similar scenario is shown by the cluster mean distributions (i.e., mean item score for each participant), whereas mean-centered item scores are quite normally distributed.
+```{r message=FALSE,warning=FALSE}
+item.desc(diary,vars=c(WC,WE),multilevel=TRUE)
+
+# frequency of discrete responses for each item
+for(Var in c(WC,WE)){ 
+  print(round(100*summary(as.factor(na.omit(diary[,Var])))/nrow(as.data.frame(na.omit(diary[,Var]))),2))}
+```
+
+<br>
+
+### 2.1.2. Correlations
+
+Here, we inspect the correlations among the six `WHLSM` items. We can note that all items are **moderately to strongly positively intercorrelated**, with no clear distinction between the two underlying dimensions at any level. As expected, correlations among individual mean scores (Matrix 2) are stronger than correlations between mean-centered scores (Matrix 3).
+```{r message=FALSE,warning=FALSE,fig.width=6,fig.height=4}
+corr.matrices(data=diary,text=TRUE,vars=c(WC,WE),cluster="ID")
+```
+
+<br>
+
+### 2.1.3. MCFA
+
+Here, we conduct a **multilevel confirmatory factor analysis** (MCFA) in compliance with [Kim et al (2016)](#ref) to evaluate the validity of the hypothesized measurement model for `WHLSM` (i.e., assuming either one or two correlated factors at both levels) and the **cross-level isomorphism** of our `WHLSM` measure.
+
+#### 2.1.3.1. Model specification {.tabset .tabset-fade .tabset-pills}
+
+Here, we specify a single-factor (global workaholism) and a two-factor (working excessively and working compulsively) multilevel model for `WHLSM` items. Following [Jack & Jorgensen (2017)](#ref), we specify three models assuming `config`ural, `metric`, and `scalar` invariance across clusters, for both models. Moreover, we fit all models both considering the full sample (N = 135) and focusing on participants that provided at least three responses (N = 127). In sum, we specify 2 (i.e., one- vs. two-factor) x 3 (i.e., configural, metric, and scalar invariance) x 2 (i.e., full or restricted sample) models. Due to the skewness of workaholism items, all models are fitted with the **MLR robust estimator**, and robust fit indices are inspected.
+
+##### N = 135 {.tabset .tabset-fade .tabset-pills}
+```{r }
+dat <- as.data.frame(na.omit(diary[,c("ID",WHLSM)])) # list-wise deletion
+cat("WHLSM: fitting MCFA models on",nrow(dat),"observations from",nlevels(as.factor(as.character(dat$ID))),"participants")
+```
+
+###### ONE-FACTOR
+
+All models converged normally without warnings. A number of participants (7-to-18%) show no variability in one or more items. **Roughly acceptable fit** indices are shown by the `config1` and the `metric1`, but not by the `scalar1` invariance model. Standardized loadings between .51 and .93 are estimated by the former two models.
+```{r }
+# Configural invariance across clusters (unconstrained model)
+config1 <- cfa('level: 1
+                 sWHLSM =~ WHLSM1 + WHLSM2 + WHLSM3 + WHLSM4 + WHLSM5 + WHLSM6
+                 level: 2
+                 tWHLSM =~ WHLSM1 + WHLSM2 + WHLSM3 + WHLSM4 + WHLSM5 + WHLSM6', data = dat, cluster = "ID", 
+                 std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(config1, std = TRUE, fit = TRUE)
+
+# Metric invariance across clusters == metric invariance across levels
+metric1 <- cfa('level: 1
+                sWHLSM =~ L1*WHLSM1 + L2*WHLSM2 + L3*WHLSM3 + L4*WHLSM4 + L5*WHLSM5 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                sWHLSM ~~ NA*sWHLSM + wWHLSM*sWHLSM 
+                level: 2
+                tWHLSM =~ L1*WHLSM1 + L2*WHLSM2 + L3*WHLSM3 + L4*WHLSM4 + L5*WHLSM5 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                tWHLSM ~~ NA*tWHLSM + bWHLSM*tWHLSM 
+                ## constrain between-level variances to == ICCs
+                bWHLSM == 1 - wWHLSM ', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(metric1, std = TRUE, fit = TRUE)
+
+# Scalar invariance across clusters implies Level-2 residual variances == 0
+scalar1 <- cfa('level: 1
+                sWHLSM =~ L1*WHLSM1 + L2*WHLSM2 + L3*WHLSM3 + L4*WHLSM4 + L5*WHLSM5 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                sWHLSM ~~ NA*sWHLSM + wWHLSM*sWHLSM 
+                level: 2
+                tWHLSM =~ L1*WHLSM1 + L2*WHLSM2 + L3*WHLSM3 + L4*WHLSM4 + L5*WHLSM5 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                tWHLSM ~~ NA*tWHLSM + bWHLSM*tWHLSM 
+                ## constrain between-level variances to == ICCs
+                bWHLSM == 1 - wWHLSM 
+                ## fixing level-2 residual variances to zero
+                WHLSM1 ~~ 0*WHLSM1
+                WHLSM2 ~~ 0*WHLSM2
+                WHLSM3 ~~ 0*WHLSM3
+                WHLSM4 ~~ 0*WHLSM4
+                WHLSM5 ~~ 0*WHLSM5
+                WHLSM6 ~~ 0*WHLSM6', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(scalar1, std = TRUE, fit = TRUE)
+```
+
+<br>
+
+###### TWO-FACTOR
+
+All models converged normally without warnings. A number of participants (7-to-18%) show no variability in one or more items. **Roughly acceptable fit** indices are shown by the `config2` and the `metric2`, but not by the `scalar2` invariance model (which also showed a **convergence problem**). Standardized loadings between .51 and .93 are estimated by the former two models. Since the fit of the `metric2` is acceptable but unoptimal, we conduct an inspection of the highest modification indices, based on which we re-specify the model by relaxing the equality constraint for item `WHLSM1` (i.e., partial metric invariance `metric2`).
+```{r }
+# configural
+config2 <- cfa('level: 1
+                 sWE =~ WHLSM1 + WHLSM3 + WHLSM5
+                 sWC =~ WHLSM2 + WHLSM4 + WHLSM6
+                 level: 2
+                 tWE =~ WHLSM1 + WHLSM3 + WHLSM5
+                 tWC =~ WHLSM2 + WHLSM4 + WHLSM6', data = dat, cluster = "ID", 
+                 std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(config2, std = TRUE, fit = TRUE)
+
+# Metric invariance across clusters == metric invariance across levels
+metric2 <- cfa('level: 1
+                sWE =~ L1*WHLSM1 + L2*WHLSM3 + L3*WHLSM5
+                sWC =~ L4*WHLSM2 + L5*WHLSM4 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                sWE ~~ NA*sWE + wWE*sWE 
+                sWC ~~ NA*sWC + wWC*sWC 
+                level: 2
+                tWE =~ L1*WHLSM1 + L2*WHLSM3 + L3*WHLSM5
+                tWC =~ L4*WHLSM2 + L5*WHLSM4 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                tWE ~~ NA*tWE + bWE*tWE 
+                tWC ~~ NA*tWC + bWC*tWC 
+                ## constrain between-level variances to == ICCs
+                bWE == 1 - wWE
+                bWC == 1 - wWC', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(metric2, std = TRUE, fit = TRUE)
+
+# Scalar invariance across clusters implies Level-2 residual variances == 0
+scalar2 <- cfa('level: 1
+                sWE =~ L1*WHLSM1 + L2*WHLSM3 + L3*WHLSM5
+                sWC =~ L4*WHLSM2 + L5*WHLSM4 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                sWE ~~ NA*sWE + wWE*sWE 
+                sWC ~~ NA*sWC + wWC*sWC 
+                level: 2
+                tWE =~ L1*WHLSM1 + L2*WHLSM3 + L3*WHLSM5
+                tWC =~ L4*WHLSM2 + L5*WHLSM4 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                tWE ~~NA*tWE + bWE*tWE 
+                tWC ~~NA*tWC + bWC*tWC 
+                ## constrain between-level variances to == ICCs
+                bWE == 1 - wWE
+                bWC == 1 - wWC
+                WHLSM1 ~~ 0*WHLSM1
+                WHLSM2 ~~ 0*WHLSM2
+                WHLSM3 ~~ 0*WHLSM3
+                WHLSM4 ~~ 0*WHLSM4
+                WHLSM5 ~~ 0*WHLSM5
+                WHLSM6 ~~ 0*WHLSM6', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(scalar2, std = TRUE, fit = TRUE)
+
+# inspecting modification indices for testing partial invariance
+modificationindices(metric2)[order(modificationindices(metric2)$mi,decreasing=TRUE),][1:4,]
+
+# freeing WHLSM1 loadings in metric-invariance models based on modification indices
+metric2.part <- cfa('level: 1
+                sWE =~ WHLSM1 + L2*WHLSM3 + L3*WHLSM5
+                sWC =~ L4*WHLSM2 + L5*WHLSM4 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                sWE ~~ NA*sWE + wWE*sWE 
+                sWC ~~ NA*sWC + wWC*sWC 
+                level: 2
+                tWE =~ WHLSM1 + L2*WHLSM3 + L3*WHLSM5
+                tWC =~ L4*WHLSM2 + L5*WHLSM4 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                tWE ~~ NA*tWE + bWE*tWE 
+                tWC ~~ NA*tWC + bWC*tWC 
+                ## constrain between-level variances to == ICCs
+                bWE == 1 - wWE
+                bWC == 1 - wWC', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(metric2.part, std = TRUE, fit = TRUE)
+```
+
+<br>
+
+##### N = 127 {.tabset .tabset-fade .tabset-pills}
+```{r }
+# selecting participants with 3+ responses
+whlsm <- character()
+dat$ID <- as.factor(as.character(dat$ID))                   
+for(ID in levels(dat$ID)){ if(nrow(dat[dat$ID==ID,])>=3){ whlsm <- c(whlsm,ID) }}
+dat2 <- dat[dat$ID%in%whlsm,]
+cat("WHLSM: fitting MCFA models on",nrow(dat2),"observations from",nlevels(as.factor(as.character(dat2$ID))),"participants")
+```
+
+###### ONE-FACTOR
+
+Results are **consistent** with those obtained with the full sample.
+```{r }
+# Configural invariance across clusters (unconstrained model)
+config12 <- cfa('level: 1
+                 sWHLSM =~ WHLSM1 + WHLSM2 + WHLSM3 + WHLSM4 + WHLSM5 + WHLSM6
+                 level: 2
+                 tWHLSM =~ WHLSM1 + WHLSM2 + WHLSM3 + WHLSM4 + WHLSM5 + WHLSM6', data = dat2, cluster = "ID", 
+                 std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(config12, std = TRUE, fit = TRUE)
+
+# Metric invariance across clusters == metric invariance across levels
+metric12 <- cfa('level: 1
+                sWHLSM =~ L1*WHLSM1 + L2*WHLSM2 + L3*WHLSM3 + L4*WHLSM4 + L5*WHLSM5 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                sWHLSM ~~ NA*sWHLSM + wWHLSM*sWHLSM 
+                level: 2
+                tWHLSM =~ L1*WHLSM1 + L2*WHLSM2 + L3*WHLSM3 + L4*WHLSM4 + L5*WHLSM5 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                tWHLSM ~~ NA*tWHLSM + bWHLSM*tWHLSM 
+                ## constrain between-level variances to == ICCs
+                bWHLSM == 1 - wWHLSM ', data = dat2, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(metric12, std = TRUE, fit = TRUE)
+
+# Scalar invariance across clusters implies Level-2 residual variances == 0
+scalar12 <- cfa('level: 1
+                sWHLSM =~ L1*WHLSM1 + L2*WHLSM2 + L3*WHLSM3 + L4*WHLSM4 + L5*WHLSM5 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                sWHLSM ~~ NA*sWHLSM + wWHLSM*sWHLSM 
+                level: 2
+                tWHLSM =~ L1*WHLSM1 + L2*WHLSM2 + L3*WHLSM3 + L4*WHLSM4 + L5*WHLSM5 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                tWHLSM ~~ NA*tWHLSM + bWHLSM*tWHLSM 
+                ## constrain between-level variances to == ICCs
+                bWHLSM == 1 - wWHLSM 
+                ## fixing level-2 residual variances to zero
+                WHLSM1 ~~ 0*WHLSM1
+                WHLSM2 ~~ 0*WHLSM2
+                WHLSM3 ~~ 0*WHLSM3
+                WHLSM4 ~~ 0*WHLSM4
+                WHLSM5 ~~ 0*WHLSM5
+                WHLSM6 ~~ 0*WHLSM6', data = dat2, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(scalar12, std = TRUE, fit = TRUE)
+```
+
+<br>
+
+###### TWO-FACTOR
+
+Results are **consistent** with those obtained with the full sample, with even **better fit** indices.
+```{r }
+# configural
+config22 <- cfa('level: 1
+                 sWE =~ WHLSM1 + WHLSM3 + WHLSM5
+                 sWC =~ WHLSM2 + WHLSM4 + WHLSM6
+                 level: 2
+                 tWE =~ WHLSM1 + WHLSM3 + WHLSM5
+                 tWC =~ WHLSM2 + WHLSM4 + WHLSM6', data = dat2, cluster = "ID", 
+                 std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(config22, std = TRUE, fit = TRUE)
+
+# Metric invariance across clusters == metric invariance across levels
+metric22 <- cfa('level: 1
+                sWE =~ L1*WHLSM1 + L2*WHLSM3 + L3*WHLSM5
+                sWC =~ L4*WHLSM2 + L5*WHLSM4 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                sWE ~~ NA*sWE + wWE*sWE 
+                sWC ~~ NA*sWC + wWC*sWC 
+                level: 2
+                tWE =~ L1*WHLSM1 + L2*WHLSM3 + L3*WHLSM5
+                tWC =~ L4*WHLSM2 + L5*WHLSM4 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                tWE ~~ NA*tWE + bWE*tWE 
+                tWC ~~ NA*tWC + bWC*tWC 
+                ## constrain between-level variances to == ICCs
+                bWE == 1 - wWE
+                bWC == 1 - wWC', data = dat2, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(metric22, std = TRUE, fit = TRUE)
+
+# Scalar invariance across clusters implies Level-2 residual variances == 0
+scalar22 <- cfa('level: 1
+                sWE =~ L1*WHLSM1 + L2*WHLSM3 + L3*WHLSM5
+                sWC =~ L4*WHLSM2 + L5*WHLSM4 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                sWE ~~ NA*sWE + wWE*sWE 
+                sWC ~~ NA*sWC + wWC*sWC 
+                level: 2
+                tWE =~ L1*WHLSM1 + L2*WHLSM3 + L3*WHLSM5
+                tWC =~ L4*WHLSM2 + L5*WHLSM4 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                tWE ~~NA*tWE + bWE*tWE 
+                tWC ~~NA*tWC + bWC*tWC 
+                ## constrain between-level variances to == ICCs
+                bWE == 1 - wWE
+                bWC == 1 - wWC
+                WHLSM1 ~~ 0*WHLSM1
+                WHLSM2 ~~ 0*WHLSM2
+                WHLSM3 ~~ 0*WHLSM3
+                WHLSM4 ~~ 0*WHLSM4
+                WHLSM5 ~~ 0*WHLSM5
+                WHLSM6 ~~ 0*WHLSM6', data = dat2, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(scalar2, std = TRUE, fit = TRUE)
+
+# inspecting modification indices for testing partial invariance
+modificationindices(metric22)[order(modificationindices(metric22)$mi,decreasing=TRUE),][1:4,]
+
+# freeing WHLSM1 loadings in metric-invariance models based on modification indices
+metric22.part <- cfa('level: 1
+                sWE =~ WHLSM1 + L2*WHLSM3 + L3*WHLSM5
+                sWC =~ L4*WHLSM2 + L5*WHLSM4 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                sWE ~~ NA*sWE + wWE*sWE 
+                sWC ~~ NA*sWC + wWC*sWC 
+                level: 2
+                tWE =~ WHLSM1 + L2*WHLSM3 + L3*WHLSM5
+                tWC =~ L4*WHLSM2 + L5*WHLSM4 + L6*WHLSM6
+                ## free and label variances to define factor ICC
+                tWE ~~ NA*tWE + bWE*tWE 
+                tWC ~~ NA*tWC + bWC*tWC 
+                ## constrain between-level variances to == ICCs
+                bWE == 1 - wWE
+                bWC == 1 - wWC', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(metric22.part, std = TRUE, fit = TRUE)
+```
+
+<br>
+
+#### 2.1.3.2. Model fit  {.tabset .tabset-fade .tabset-pills}
+
+Here, we inspect the model fit of the specified MCFA models. According to [Hu and Bentler (1999)](#ref), we consider RMSEA ≤ .06, CFI ≥ .95, and SRMR ≤ .08 as indicative of adequate fit. Robust RMSEA and CFI indices are considered accounting for the non-normality of workaholism item scores.
+
+##### N = 135
+
+In the full sample, **better fit is shown by two-factor** compared to one-factor solutions, with satisfactory fit indices shown by the two-factor models assuming **either configural or metric** invariance across clusters. While the two-factor configural model showed overall better fit than the corresponding metric model, the inspection of modification indices suggested that relaxing the equality constraint for the first item `WHLSM1` substantially improves the model fit. Coherently, the **two-factor model assuming partial invariance across levels** shows improved fit and was selected as the most accurate model describing workaholism items. In contrast, both models assuming scalar invariance are rejected.
+```{r }
+## compare fit (considering robust fit indices)
+(fit <- fit.ind(model=c(config1,metric1,scalar1,config2,metric2,metric2.part,scalar2),
+               models.names=c("1F_config","1F_metric","1F_scalar","2F_config","2F_metric","2F_metricPartial","2F_scalar"),
+               robust=TRUE))
+write.csv2(fit,"RESULTS/Table1.csv") # saving table for the paper
+```
+
+<br>
+
+##### N = 127
+
+The results obtained on the subsample of participants with at least 3 responses to workaholism items are **highly similar to those obtained with the full sample**.
+```{r }
+## compare fit (considering robust fit indices)
+(fit <- fit.ind(model=c(config12,metric12,scalar12,config22,metric22,metric22.part,scalar22),
+               models.names=c("1F_config","1F_metric","1F_scalar","2F_config","2F_metric","2F_metricPartial","2F_scalar"),
+               robust=TRUE))
+```
+
+<br>
+
+### 2.1.4. Reliability {.tabset .tabset-fade .tabset-pills}
+
+#### N = 135
+
+Here, we inspect the level-specific reliability based on the selected MCFA model `metric2.part`, considering coefficients higher than .60 as signs of adequate reliability. We can note that **all measures show adequate reliability at both levels**, with higher estimates for the single-factor measures.
+```{r }
+data.frame(measure=c("Total score","Working Excessively","Working compulsively"),
+           omega_w=c(MCFArel(fit=metric2.part,level=1,items=1:6,item.labels=WHLSM),
+                     MCFArel(fit=metric2.part,level=1,items=c(1,3,5),item.labels=WE),
+                     MCFArel(fit=metric2.part,level=1,items=c(2,4,6),item.labels=WC)),
+           omega_b=c(MCFArel(fit=metric2.part,level=2,items=1:6,item.labels=WHLSM),
+                     MCFArel(fit=metric2.part,level=2,items=c(1,3,5),item.labels=WE),
+                     MCFArel(fit=metric2.part,level=2,items=c(2,4,6),item.labels=WC)))
+```
+
+<br>
+
+#### N = 127
+
+Results are highly similar to those obtained with the full sample.
+```{r }
+data.frame(measure=c("Total score","Working Excessively","Working compulsively"),
+           omega_w=c(MCFArel(fit=metric22.part,level=1,items=1:6,item.labels=WHLSM),
+                     MCFArel(fit=metric22.part,level=1,items=c(1,3,5),item.labels=WE),
+                     MCFArel(fit=metric22.part,level=1,items=c(2,4,6),item.labels=WC)),
+           omega_b=c(MCFArel(fit=metric22.part,level=2,items=1:6,item.labels=WHLSM),
+                     MCFArel(fit=metric22.part,level=2,items=c(1,3,5),item.labels=WE),
+                     MCFArel(fit=metric22.part,level=2,items=c(2,4,6),item.labels=WC)))
+```
+
+<br>
+
+## 2.2. Emotional Exhaustion
+
+Only a single-factor model is specified for the four daily emotional exhaustion `EE` items.
+```{r }
+# selecting EE items
+(EE <- paste("EE",1:4,sep=""))
+```
+<br>
+
+### 2.2.1. Item description
+
+Here, we inspect the distribution and intraclass correlations (ICC) of `EE` items. ICCs range from .44 to .57, indexing an overall balance between inter- and intra-individual variability. Overall, item scores show a rather **skewed** distribution, with 3 items (i.e., `EE2`, `EE3`, and `EE4`) being positively skewed and one item `EE1` being negatively skewed. A similar scenario is shown by the cluster mean distributions (i.e., mean item score for each participant), whereas mean-centered item scores are quite normally distributed.
+```{r message=FALSE,warning=FALSE}
+item.desc(diary,vars=c(EE),multilevel=TRUE)
+```
+
+<br>
+
+### 2.2.2. Correlations
+
+Here, we inspect the correlations among the four `EE` items. We can note that the items are **moderately to strongly positively intercorrelated**, at both level. As expected, correlations among individual mean scores (Matrix 2) are stronger than correlations between mean-centered scores (Matrix 3). Item `EE1` shows the weakest correlations with the remaining items, and we can note that it is the only item whose exclusion would increase the Cronbach's alpha level if the responses were treated as independent observations. Consequently, below we conduct the analyses by both **including and excluding item `EE1`**.
+```{r message=FALSE,warning=FALSE,fig.width=4,fig.height=3}
+corr.matrices(data=diary,text=TRUE,vars=c(EE),cluster="ID")
+
+# alpha for item dropped
+a <- psych::alpha(diary[,EE])
+round(a$total[1:2],2) # Cronbach's alpha
+round(a$alpha.drop[,1:2],2) # alpha for item dropped
+```
+
+<br>
+
+### 2.2.3. MCFA
+
+Here, we conduct a **multilevel confirmatory factor analysis** (MCFA) in compliance with [Kim et al (2016)](#ref) to evaluate the validity of the hypothesized measurement model for `EE` (i.e., assuming either one or two correlated factors at both levels) and the **cross-level isomorphism** of our `EE` measure.
+
+#### 2.2.3.1. Model specification {.tabset .tabset-fade .tabset-pills}
+
+Here, we specify a single-factor multilevel model for `EE` items. Following [Jack & Jorgensen (2017)](#ref), we specify three models assuming `config`ural, `metric`, and `scalar` invariance across clusters, respectively. As noted above, we also replicate the analysis by excluding item `EE1`. Moreover, we fit all models both considering the full sample (N = 135) and focusing on participants that provided at least three responses (N = 127). In sum, we specify 3 (i.e., configural, metric, and scalar invariance) x 2 (i.e., four-item vs. three-item scale) x 2 (i.e., full or restricted sample) models. Due to the skewness of `EE` items, all models are fitted with the **MLR robust estimator**.
+
+##### N = 134 {.tabset .tabset-fade .tabset-pills}
+```{r }
+dat <- as.data.frame(na.omit(diary[,c("ID",EE)])) # list-wise deletion
+cat("EE: fitting MCFA models on",nrow(dat),"observations from",nlevels(as.factor(as.character(dat$ID))),"participants")
+```
+
+###### 4-ITEM
+
+All models converged normally without warnings, but the `metric1.3` model shows an **improper solution** for item `EE2` (i.e., Heywood case) at level 2. Since the upper CI for such variance estimate is positive, we rule out the possibility of structural misspecification and we handle the problem by fixing its level-2 residual variance to the 15% of its total level-2 variance (see [Joreskog & Sobrom (1996)](#ref)). A number of participants (3-to-12%) show no variability in one or more items. **Unsatisfactory fit** is shown by any model, suggesting unsatisfactory measurement properties for the 4-item 1-factor solution.
+```{r }
+# Configural invariance across clusters (unconstrained model)
+config1.4 <- cfa('level: 1
+                sEE =~ EE1 + EE2 + EE3 + EE4
+                level: 2
+                tEE =~ EE1 + EE2 + EE3 + EE4', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(config1.4, std = TRUE, fit = TRUE)
+
+# Metric invariance across clusters == metric invariance across levels
+metric1.4 <- cfa('level: 1
+                sEE =~ L1*EE1 + L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                sEE ~~ NA*sEE + wEE*sEE 
+                level: 2
+                tEE =~ L1*EE1 + L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                tEE ~~ NA*tEE + bEE*tEE 
+                ## constrain between-level variances to == ICCs
+                bEE == 1 - wEE ', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+parameterestimates(metric1.4)[parameterestimates(metric1.4)$op=="~~" & parameterestimates(metric1.4)$est<0,] # Heywood on EE2
+
+# Re-specifying metric invariance model by fixing EE2 lv-2 residual variance to the 15% of its total level-2 variance
+metric1.4.fix <- 'level: 1
+                  sEE =~ L1*EE1 + L2*EE2 + L3*EE3 + L4*EE4
+                  ## free and label variances to define factor ICC
+                  sEE ~~ NA*sEE + wEE*sEE 
+                  level: 2
+                  tEE =~ L1*EE1 + L2*EE2 + L3*EE3 + L4*EE4
+                  ## free and label variances to define factor ICC
+                  tEE ~~ NA*tEE + bEE*tEE 
+                  ## constrain between-level variances to == ICCs
+                  bEE == 1 - wEE
+                  ## fixing EE2 level-2 variance to rho2
+                  EE2 ~~ rho2*EE2'
+fit <- lmer(EE2 ~ 1 + (1|ID),data=dat) # null LMER model
+EE2varlv2 <- as.data.frame(VarCorr(fit))[1,4] # between-subjects variance of item EE2
+metric1.4.fix <- cfa(gsub("rho2",EE2varlv2*.15,metric1.4.fix),
+                     data = dat, cluster = 'ID', std.lv = TRUE, estimator = "MLR") # fixing rho2 (problem solved)
+summary(metric1.4.fix, std = TRUE, fit = TRUE)
+
+# Scalar invariance across clusters implies Level-2 residual variances == 0
+scalar1.4 <- cfa('level: 1
+                sEE =~ L1*EE1 + L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                sEE ~~ NA*sEE + wEE*sEE 
+                level: 2
+                tEE =~ L1*EE1 + L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                tEE ~~ NA*tEE + bEE*tEE 
+                ## constrain between-level variances to == ICCs
+                bEE == 1 - wEE 
+                ## fixing level-2 residual variances to zero
+                EE1 ~~ 0*EE1
+                EE2 ~~ 0*EE2
+                EE3 ~~ 0*EE3
+                EE4 ~~ 0*EE4', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(scalar1.4, std = TRUE)
+```
+
+<br>
+
+###### 3-ITEM
+
+All models converged normally without warnings or improper solutions. Contrarily to the 4-item model, the 3-item `metric1.3` model shows **satisfactory fit** indices, whereas the `config1.3` model is saturated, and the `scalar1.3` model is rejected. Standardized loadings between .62 and .98 are estimated by the former model.
+```{r }
+# Configural invariance across clusters (unconstrained model)
+config1.3 <- cfa('level: 1
+                sEE =~ EE2 + EE3 + EE4
+                level: 2
+                tEE =~ EE2 + EE3 + EE4', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(config1.3, std = TRUE, fit = TRUE)
+
+# Metric invariance across clusters == metric invariance across levels
+metric1.3 <- cfa('level: 1
+                sEE =~ L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                sEE ~~ NA*sEE + wEE*sEE 
+                level: 2
+                tEE =~ L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                tEE ~~ NA*tEE + bEE*tEE 
+                ## constrain between-level variances to == ICCs
+                bEE == 1 - wEE ', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(metric1.3, std = TRUE, fit = TRUE)
+
+# Scalar invariance across clusters implies Level-2 residual variances == 0
+scalar1.3 <- cfa('level: 1
+                sEE =~ L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                sEE ~~ NA*sEE + wEE*sEE 
+                level: 2
+                tEE =~ L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                tEE ~~ NA*tEE + bEE*tEE 
+                ## constrain between-level variances to == ICCs
+                bEE == 1 - wEE 
+                ## fixing level-2 residual variances to zero
+                EE2 ~~ 0*EE2
+                EE3 ~~ 0*EE3
+                EE4 ~~ 0*EE4', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(scalar1.3, std = TRUE, fit = TRUE)
+```
+
+<br>
+
+##### N = 128 {.tabset .tabset-fade .tabset-pills}
+```{r }
+# selecting participants with 3+ responses
+ee <- character()
+dat$ID <- as.factor(as.character(dat$ID))                   
+for(ID in levels(dat$ID)){ if(nrow(dat[dat$ID==ID,])>=3){ ee <- c(ee,ID) }}
+dat2 <- dat[dat$ID%in%ee,]
+cat("EE: fitting MCFA models on",nrow(dat2),"observations from",nlevels(as.factor(as.character(dat2$ID))),"participants")
+```
+
+###### 4-ITEM
+
+Results are similar to those obtained with the full sample, showing **unsatisfactory fit** for both the `config1.42` and the `metric1.42` model, with the same Heywood case in the latter.
+```{r }
+# Configural invariance across clusters (unconstrained model)
+config1.42 <- cfa('level: 1
+                sEE =~ EE1 + EE2 + EE3 + EE4
+                level: 2
+                tEE =~ EE1 + EE2 + EE3 + EE4', data = dat2, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(config1.4, std = TRUE, fit = TRUE)
+
+# Metric invariance across clusters == metric invariance across levels
+metric1.42 <- cfa('level: 1
+                sEE =~ L1*EE1 + L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                sEE ~~ NA*sEE + wEE*sEE 
+                level: 2
+                tEE =~ L1*EE1 + L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                tEE ~~ NA*tEE + bEE*tEE 
+                ## constrain between-level variances to == ICCs
+                bEE == 1 - wEE ', data = dat2, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+parameterestimates(metric1.42)[parameterestimates(metric1.42)$op=="~~" & parameterestimates(metric1.42)$est<0,] # Heywood EE2
+
+# Re-specifying metric invariance model by fixing EE2 lv-2 residual variance to the 15% of its total level-2 variance
+metric1.4.fix2 <- 'level: 1
+                  sEE =~ L1*EE1 + L2*EE2 + L3*EE3 + L4*EE4
+                  ## free and label variances to define factor ICC
+                  sEE ~~ NA*sEE + wEE*sEE 
+                  level: 2
+                  tEE =~ L1*EE1 + L2*EE2 + L3*EE3 + L4*EE4
+                  ## free and label variances to define factor ICC
+                  tEE ~~ NA*tEE + bEE*tEE 
+                  ## constrain between-level variances to == ICCs
+                  bEE == 1 - wEE
+                  ## fixing EE2 level-2 variance to rho2
+                  EE2 ~~ rho2*EE2'
+fit <- lmer(EE2 ~ 1 + (1|ID),data=dat2) # null LMER model
+EE2varlv2 <- as.data.frame(VarCorr(fit))[1,4] # between-subjects variance of item EE2
+metric1.4.fix2 <- cfa(gsub("rho2",EE2varlv2*.15,metric1.4.fix2),
+                     data = dat2, cluster = 'ID', std.lv = TRUE, estimator = "MLR") # fixing rho2 (problem solved)
+summary(metric1.4.fix2, std = TRUE, fit = TRUE)
+
+# Scalar invariance across clusters implies Level-2 residual variances == 0
+scalar1.42 <- cfa('level: 1
+                sEE =~ L1*EE1 + L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                sEE ~~ NA*sEE + wEE*sEE 
+                level: 2
+                tEE =~ L1*EE1 + L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                tEE ~~ NA*tEE + bEE*tEE 
+                ## constrain between-level variances to == ICCs
+                bEE == 1 - wEE 
+                ## fixing level-2 residual variances to zero
+                EE1 ~~ 0*EE1
+                EE2 ~~ 0*EE2
+                EE3 ~~ 0*EE3
+                EE4 ~~ 0*EE4', data = dat2, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(scalar1.42, std = TRUE)
+```
+
+<br>
+
+###### 3-ITEM
+
+Results are similar to those obtained with the full sample, showing **satisfactory fit** for the `metric1.32` model.
+```{r }
+# Configural invariance across clusters (unconstrained model)
+config1.32 <- cfa('level: 1
+                sEE =~ EE2 + EE3 + EE4
+                level: 2
+                tEE =~ EE2 + EE3 + EE4', data = dat2, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(config1.32, std = TRUE, fit = TRUE)
+
+# Metric invariance across clusters == metric invariance across levels
+metric1.32 <- cfa('level: 1
+                sEE =~ L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                sEE ~~ NA*sEE + wEE*sEE 
+                level: 2
+                tEE =~ L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                tEE ~~ NA*tEE + bEE*tEE 
+                ## constrain between-level variances to == ICCs
+                bEE == 1 - wEE ', data = dat2, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(metric1.32, std = TRUE, fit = TRUE)
+
+# Scalar invariance across clusters implies Level-2 residual variances == 0
+scalar1.32 <- cfa('level: 1
+                sEE =~ L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                sEE ~~ NA*sEE + wEE*sEE 
+                level: 2
+                tEE =~ L2*EE2 + L3*EE3 + L4*EE4
+                ## free and label variances to define factor ICC
+                tEE ~~ NA*tEE + bEE*tEE 
+                ## constrain between-level variances to == ICCs
+                bEE == 1 - wEE 
+                ## fixing level-2 residual variances to zero
+                EE2 ~~ 0*EE2
+                EE3 ~~ 0*EE3
+                EE4 ~~ 0*EE4', data = dat2, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(scalar1.32, std = TRUE, fit = TRUE)
+```
+
+<br>
+
+#### 2.2.3.2. Model fit  {.tabset .tabset-fade .tabset-pills}
+
+Here, we inspect the model fit of the specified MCFA models. According to [Hu and Bentler (1999)](#ref), we consider RMSEA ≤ .06, CFI ≥ .95, and SRMR ≤ .08 as indicative of adequate fit. Robust RMSEA and CFI indices are considered accounting for the non-normality of workaholism item scores.
+
+##### N = 134
+
+In the full sample, **satisfactory fit is shown by one-factor model `metric1.3` assuming metric invariance**  across clusters (i.e., weak invariance across levels) based on **three items** (i.e., excluding item `EE1`), whereas the `config1.3` model is saturated and shows worse BIC, and the `scalar1.4` model is rejected. The fit of the `scalar1.4` model cannot be evaluated due to a convergence problem, whereas that of the `configural1.4` and the `metric1.4` is unsatisfactory, suggesting measurement problems with item `EE1`.
+```{r }
+## compare fit (considering robust fit indices)
+fit.ind(model=c(config1.4,metric1.4.fix,config1.3,metric1.3,scalar1.3),
+        models.names=c("config_4item","metric_4item",
+                       "config_3item","metric_3item","scalar_3item"),robust=TRUE)
+```
+
+<br>
+
+##### N = 128
+
+The results obtained on the subsample of participants with at least 3 responses to `EE` items are **highly similar to those obtained with the full sample**. Again, the fit of the `scalar1.4` model cannot be evaluated due to a convergence problem. 
+```{r }
+## compare fit (considering robust fit indices)
+fit.ind(model=c(config1.42,metric1.4.fix2,config1.32,metric1.32,scalar1.32),
+        models.names=c("config_4item","metric_4item",
+                       "config_3item","metric_3item","scalar_3item"),robust=TRUE)
+```
+
+<br>
+
+### 2.2.4. Reliability {.tabset .tabset-fade .tabset-pills}
+
+#### N = 134
+
+Here, we inspect the level-specific reliability based on the selected MCFA model `metric1.3`, considering coefficients higher than .60 as signs of adequate reliability. We can note that the measure shows **adequate reliability at both levels**.
+```{r }
+data.frame(measure=c("1F_EE_3item"),
+           omega_w=MCFArel(fit=metric1.3,level=1,items=1:3,item.labels=EE[2:4]),
+           omega_b=MCFArel(fit=metric1.3,level=2,items=1:3,item.labels=EE[2:4]))
+```
+
+<br>
+
+#### N = 128
+
+Results are identical to those obtained with the full sample.
+```{r }
+data.frame(measure=c("1F_EE_3item"),
+           omega_w=MCFArel(fit=metric1.32,level=1,items=1:3,item.labels=EE[2:4]),
+           omega_b=MCFArel(fit=metric1.32,level=2,items=1:3,item.labels=EE[2:4]))
+```
+
+<br>
+
+## 2.3. Psychological Detachment
+
+Only a single-factor structure is specified for the three `PD` items.
+```{r }
+# selecting PD items
+(PD <- c("R.det1","R.det2","R.det3"))
+```
+
+<br>
+
+### 2.3.1. Item description
+
+Here, we inspect the distribution and intraclass correlations (ICC) of `DP` items. ICCs range from .30 to .35, indexing higher variability at the intra- than at the inter-individual level. Overall, item scores show a **rather skewed**. In contrast, cluster means and mean-centered item scores are more normally distributed.
+```{r message=FALSE,warning=FALSE}
+item.desc(diary,vars=PD,multilevel=TRUE)
+```
+
+<br>
+
+### 2.3.2. Correlations
+
+Here, we inspect the correlations among the three `PD` items. We can note that they are **strongly and positively intercorrelated**. As expected, correlations among individual mean scores (Matrix 2) are stronger than correlations between mean-centered scores (Matrix 3).
+```{r message=FALSE,warning=FALSE,fig.width=6,fig.height=4}
+corr.matrices(data=diary,text=TRUE,vars=PD,cluster="ID")
+```
+
+<br>
+
+### 2.3.3. MCFA
+
+Here, we conduct a **multilevel confirmatory factor analysis** (MCFA) in compliance with [Kim et al (2016)](#ref) to evaluate the validity of the hypothesized measurement model for `RE` (i.e., assuming either one or two correlated factors at both levels) and the **cross-level isomorphism** of our `RE` measure.
+
+#### 2.3.3.1. Model specification {.tabset .tabset-fade .tabset-pills}
+
+Here, we specify a single-factor multilevel model of `PD` items. Following [Jack & Jorgensen (2017)](#ref), we specify three models assuming `config`ural, `metric`, and `scalar` invariance across clusters. Moreover, we fit all models both considering the full sample (N = 134) and focusing on participants that provided at least three responses (N = 128). In sum, we specify 3 (i.e., configural, metric, and scalar invariance) x 2 (i.e., full or restricted sample) models. Due to the skewness of item scores, all models are fitted with the **MLR robust estimator**, and robust fit indices are inspected.
+
+##### N = 134 {.tabset .tabset-fade .tabset-pills}
+```{r }
+dat <- as.data.frame(na.omit(diary[,c("ID",PD)])) # list-wise deletion
+cat("PD: fitting MCFA models on",nrow(dat),"observations from",nlevels(as.factor(as.character(dat$ID))),"participants")
+```
+
+All models converged normally without problems. **Satisfactory fit is shown by the `metric1` model**, estimating standardized loadings between .82 and .98.
+```{r }
+# Configural invariance across clusters (unconstrained model)
+config1 <- cfa('level: 1
+                sPD =~ R.det1 + R.det2 + R.det3
+                 level: 2
+                tPD =~ R.det1 + R.det2 + R.det3', 
+               data = dat, cluster = "ID",  
+               std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(config1, std = TRUE, fit = TRUE)
+
+# Metric invariance across clusters == metric invariance across levels
+metric1 <- cfa('level: 1
+                sPD =~ L1*R.det1 + L2*R.det2 + L3*R.det3
+                ## free and label variances to define factor ICC
+                sPD ~~ NA*sPD + wPD*sPD 
+                level: 2
+                tPD =~ L1*R.det1 + L2*R.det2 + L3*R.det3
+                ## free and label variances to define factor ICC
+                tPD ~~ NA*tPD + bPD*tPD 
+                ## constrain between-level variances to == ICCs
+                bPD == 1 - wPD', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(metric1, std = TRUE, fit = TRUE)
+
+# Scalar invariance across clusters implies Level-2 residual variances == 0
+scalar1 <- cfa('level: 1
+                sPD =~ L1*R.det1 + L2*R.det2 + L3*R.det3
+                ## free and label variances to define factor ICC
+                sPD ~~ NA*sPD + wPD*sPD
+                level: 2
+                tPD =~ L1*R.det1 + L2*R.det2 + L3*R.det3
+                ## free and label variances to define factor ICC
+                tPD ~~ NA*tPD + bPD*tPD 
+                ## constrain between-level variances to == ICCs
+                bPD == 1 - wPD
+                ## fixing level-2 residual variances to zero
+                R.det1 ~~ 0*R.det1
+                R.det2 ~~ 0*R.det2
+                R.det3 ~~ 0*R.det3', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(scalar1, std = TRUE, fit = TRUE)
+```
+
+<br>
+
+##### N = 128 {.tabset .tabset-fade .tabset-pills}
+```{r }
+# selecting participants with 3+ responses
+re <- character()
+dat$ID <- as.factor(as.character(dat$ID))                   
+for(ID in levels(dat$ID)){ if(nrow(dat[dat$ID==ID,])>=3){ re <- c(re,ID) }}
+dat2 <- dat[dat$ID%in%re,]
+cat("RE: fitting MCFA models on",nrow(dat2),"observations from",nlevels(as.factor(as.character(dat2$ID))),"participants")
+```
+
+Results are highly similar to those obtained with the full sample, showing **satisfactory fit for the metric invariance model**.
+```{r }
+# Configural invariance across clusters (unconstrained model)
+config12 <- cfa('level: 1
+                sPD =~ R.det1 + R.det2 + R.det3
+                 level: 2
+                tPD =~ R.det1 + R.det2 + R.det3', 
+               data = dat2, cluster = "ID",  
+               std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(config12, std = TRUE, fit = TRUE)
+
+# Metric invariance across clusters == metric invariance across levels
+metric12 <- cfa('level: 1
+                sPD =~ L1*R.det1 + L2*R.det2 + L3*R.det3
+                ## free and label variances to define factor ICC
+                sPD ~~ NA*sPD + wPD*sPD 
+                level: 2
+                tPD =~ L1*R.det1 + L2*R.det2 + L3*R.det3
+                ## free and label variances to define factor ICC
+                tPD ~~ NA*tPD + bPD*tPD 
+                ## constrain between-level variances to == ICCs
+                bPD == 1 - wPD', data = dat2, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(metric12, std = TRUE, fit = TRUE)
+
+# Scalar invariance across clusters implies Level-2 residual variances == 0
+scalar12 <- cfa('level: 1
+                sPD =~ L1*R.det1 + L2*R.det2 + L3*R.det3
+                ## free and label variances to define factor ICC
+                sPD ~~ NA*sPD + wPD*sPD
+                level: 2
+                tPD =~ L1*R.det1 + L2*R.det2 + L3*R.det3
+                ## free and label variances to define factor ICC
+                tPD ~~ NA*tPD + bPD*tPD 
+                ## constrain between-level variances to == ICCs
+                bPD == 1 - wPD
+                ## fixing level-2 residual variances to zero
+                R.det1 ~~ 0*R.det1
+                R.det2 ~~ 0*R.det2
+                R.det3 ~~ 0*R.det3', data = dat2, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(scalar12, std = TRUE, fit = TRUE)
+```
+
+<br>
+
+#### 2.3.3.2. Model fit  {.tabset .tabset-fade .tabset-pills}
+
+Here, we inspect the model fit of the specified MCFA models. According to [Hu and Bentler (1999)](#ref), we consider RMSEA ≤ .06, CFI ≥ .95, and SRMR ≤ .08 as indicative of adequate fit. Robust RMSEA and CFI indices are considered accounting for the non-normality of workaholism item scores.
+
+##### N = 134
+
+In the full sample, **satisfactory fit is shown by the metric invariance model `metric1`** whereas model `scalar1` assuming scalar invariance is rejected due to high RMSEA, and the fit of model `config1` cannot be evaluated because it is a saturated model. Moreover, in terms of information criteria, both AIC and BIC highlight **model `metric1` as the best model**.
+```{r }
+## compare fit (considering robust fit indices)
+fit.ind(model=c(config1,metric1,scalar1),
+        models.names=c("1F_config","1F_metric","1F_scalar"),robust=TRUE)
+```
+
+<br>
+
+##### N = 128
+
+The results obtained on the subsample of participants with at least 3 responses to psychological detachment items are **highly similar to those obtained with the full sample**.
+```{r }
+## compare fit (considering robust fit indices)
+fit.ind(model=c(config12,metric12,scalar12),
+        models.names=c("1F_config","1F_metric","1F_scalar"),robust=TRUE)
+```
+
+<br>
+
+### 2.3.4. Reliability {.tabset .tabset-fade .tabset-pills}
+
+#### N = 134
+
+Here, we inspect the level-specific reliability based on the selected MCFA model `metric1`, considering coefficients higher than .60 as signs of adequate reliability. We can note that **all measures show adequate reliability at both levels**, with higher estimates for the single-factor measures.
+```{r }
+data.frame(measure=c("Psychological detachment"),
+           omega_w=MCFArel(fit=metric1,level=1,items=1:3,item.labels=PD),
+           omega_b=MCFArel(fit=metric1,level=2,items=1:3,item.labels=PD))
+```
+
+<br>
+
+#### N = 128
+
+Results are highly similar to those obtained with the full sample.
+```{r }
+data.frame(measure=c("Psychological detachment"),
+           omega_w=MCFArel(fit=metric12,level=1,items=1:3,item.labels=PD),
+           omega_b=MCFArel(fit=metric12,level=2,items=1:3,item.labels=PD))
+```
+
+<br>
+
+## 2.4. Exhaustion vs. Detachment
+
+Here, we evaluate the distinctiveness between `EE` and `PD` items by evaluating the fit of alternative models assuming them as either distinct or the same latent factor. Here, we do not evaluate cross-level invariance but we only focus on the distinctiveness between the two factors. Note that for the former measure we only consider three items (i.e., we exclude item `EE1`; see above).
+
+### 2.4.1. Model specification {.tabset .tabset-fade .tabset-pills}
+
+#### N = 134 {.tabset .tabset-fade .tabset-pills}
+```{r }
+dat <- as.data.frame(na.omit(diary[,c("ID",EE,PD)])) # list-wise deletion
+cat("EE & PD: fitting MCFA models on",nrow(dat),"observations from",nlevels(as.factor(as.character(dat$ID))),"participants")
+```
+
+##### ONE-FACTOR {.tabset .tabset-fade .tabset-pills}
+
+First, we specify a model with a single factor being reflected by both `EE` and `PD` items. Since an **Heywood case** is shown at level 2 for item `EE3`, we re-specify the model by fixing its level-2 residual variance to the 15% of its total level-2 variance (see [Joreskog & Sobrom (1996)](#ref)).
+```{r }
+# Configural invariance across clusters (unconstrained model)
+config1 <- cfa('level: 1
+                state =~ EE2 + EE3 + EE4 + R.det1 + R.det2 + R.det3
+                level: 2
+                trait =~ EE2 + EE3 + EE4 + R.det1 + R.det2 + R.det3', 
+               data = dat, cluster = "ID", 
+               std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+parameterestimates(config1)[parameterestimates(config1)$op=="~~" & parameterestimates(config1)$est<0,] # Heywood on EE3
+
+# Re-specifying Configural invariance model by fixing EE3 lv-2 residual variance to the 15% of its total level-2 variance
+config1.fix <- 'level: 1
+                state =~ EE2 + EE3 + EE4 + R.det1 + R.det2 + R.det3
+                level: 2
+                trait =~ EE2 + EE3 + EE4 + R.det1 + R.det2 + R.det3
+                ## fixing EE3 level-2 variance to rho2
+                EE3 ~~ rho2*EE3'
+fit <- lmer(EE3 ~ 1 + (1|ID),data=dat) # null LMER model
+EE3varlv2 <- as.data.frame(VarCorr(fit))[1,4] # between-subjects variance of item EE3
+config1.fix <- cfa(gsub("rho2",EE3varlv2*.15,config1.fix),
+                   data = dat, cluster = 'ID', std.lv = TRUE, estimator = "MLR") # fixing rho2 (problem solved)
+summary(config1.fix, std = TRUE, fit = TRUE)
+```
+
+<br>
+
+##### TWO-FACTOR {.tabset .tabset-fade .tabset-pills}
+
+Second, we specify the two-factor models with `EE` and `PD` being different latent constructs. Both models show an **Heywood case** at level 2 for item `EE3`, which we handle by fixing its level-2 residual variance to the 15% of its total level-2 variance (see [Joreskog & Sobrom (1996)](#ref)).
+```{r }
+# EE items with Det
+config2 <- cfa('level: 1
+                 sEE =~ EE2 + EE3 + EE4 
+                 sPD =~ R.det1 + R.det2 + R.det3
+                 level: 2
+                 tEE =~ EE2 + EE3 + EE4 
+                 tPD =~ R.det1 + R.det2 + R.det3', data = dat, cluster = "ID", 
+                 std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+parameterestimates(config2)[parameterestimates(config2)$op=="~~" & parameterestimates(config2)$est<0,] # Heywood on EE3
+config2.fix <- 'level: 1
+                 sEE =~ EE2 + EE3 + EE4 
+                 sPD =~ R.det1 + R.det2 + R.det3
+                 level: 2
+                 tEE =~ EE2 + EE3 + EE4 
+                 tPD =~ R.det1 + R.det2 + R.det3
+                 ## fixing EE3 level-2 variance to rho2
+                 EE3 ~~ rho2*EE3'
+config2.fix <- cfa(gsub("rho2",EE3varlv2*.15,config2.fix),
+                    data = dat, cluster = 'ID', std.lv = TRUE, estimator = "MLR") # fixing rho2 (problem solved)
+summary(config2.fix, std = TRUE, fit = TRUE)
+```
+
+<br>
+
+#### N = 128 {.tabset .tabset-fade .tabset-pills}
+```{r }
+# selecting participants with 3+ responses
+eere <- character()
+dat$ID <- as.factor(as.character(dat$ID))                   
+for(ID in levels(dat$ID)){ if(nrow(dat[dat$ID==ID,])>=3){ eere <- c(eere,ID) }}
+dat2 <- dat[dat$ID%in%eere,]
+cat("EE & PD: fitting MCFA models on",nrow(dat2),"observations from",nlevels(as.factor(as.character(dat2$ID))),"participants")
+```
+
+##### ONE-FACTOR {.tabset .tabset-fade .tabset-pills}
+
+First, we specify a model with a single factor being reflected by both `EE` and `PD` items. Since an **Heywood case** is shown at level 2 for item `EE3`, we re-specify the model by fixing its level-2 residual variance to the 15% of its total level-2 variance (see [Joreskog & Sobrom (1996)](#ref)).
+```{r }
+# Configural invariance across clusters (unconstrained model)
+config12 <- cfa('level: 1
+                state =~ EE2 + EE3 + EE4 + R.det1 + R.det2 + R.det3
+                level: 2
+                trait =~ EE2 + EE3 + EE4 + R.det1 + R.det2 + R.det3', 
+               data = dat2, cluster = "ID", 
+               std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+parameterestimates(config12)[parameterestimates(config12)$op=="~~" & parameterestimates(config12)$est<0,] # Heywood on EE3
+
+# Re-specifying Configural invariance model by fixing EE3 lv-2 residual variance to the 15% of its total level-2 variance
+config12.fix <- 'level: 1
+                state =~ EE2 + EE3 + EE4 + R.det1 + R.det2 + R.det3
+                level: 2
+                trait =~ EE2 + EE3 + EE4 + R.det1 + R.det2 + R.det3
+                ## fixing EE3 level-2 variance to rho2
+                EE3 ~~ rho2*EE3'
+fit <- lmer(EE3 ~ 1 + (1|ID),data=dat2) # null LMER model
+EE3varlv22 <- as.data.frame(VarCorr(fit))[1,4] # between-subjects variance of item EE3
+config12.fix <- cfa(gsub("rho2",EE3varlv22*.15,config12.fix),
+                   data = dat2, cluster = 'ID', std.lv = TRUE, estimator = "MLR") # fixing rho2 (problem solved)
+summary(config12.fix, std=TRUE, fit=TRUE)
+```
+
+<br>
+
+##### TWO-FACTOR {.tabset .tabset-fade .tabset-pills}
+
+Second, we specify the two-factor models with `EE` and `PD` being different latent constructs.
+```{r }
+# EE items with Det
+config22 <- cfa('level: 1
+                 sEE =~ EE2 + EE3 + EE4 
+                 sPD =~ R.det1 + R.det2 + R.det3
+                 level: 2
+                 tEE =~ EE2 + EE3 + EE4 
+                 tPD =~ R.det1 + R.det2 + R.det3', data = dat2, cluster = "ID", 
+                 std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(config22, std=TRUE, fit=TRUE)
+```
+
+<br>
+
+### 2.4.2. Model fit  {.tabset .tabset-fade .tabset-pills}
+
+Here, we compare the model fit of the specified MCFA models.
+
+#### N = 134
+
+In the full sample, **better fit is shown by three-factor** model, whereas all the alternative models not distinguishing between `EE` and `RE` are rejected. This pattern is consistent across all the considered fit indices and information criteria.
+```{r }
+fit.ind(model=c(config1.fix,config2.fix),models.names=c("One-factor","Two-factor"),robust=TRUE)
+```
+
+<br>
+
+#### N = 128
+
+The results obtained on the subsample of participants with at least 3 responses are **highly similar to those obtained with the full sample**.
+```{r }
+fit.ind(model=c(config12.fix,config22),models.names=c("One-factor","Two-factor"),robust=TRUE)
+```
+
+<br>
+
+## 2.5. Sleep disturbances
+
+Only a single-factor model is specified for the three daily sleep disturbances `SD` items.
+```{r }
+# selecting SD items
+(SD <- paste("SQ",1:4,sep=""))
+```
+<br>
+
+### 2.5.1. Item description
+
+Here, we inspect the distribution and intraclass correlations (ICC) of `SQ` items. ICCs range from .30 to .40, indexing sightly more intra-individual than inter-individual variability. Overall, item scores show a **highly skewed** distribution. A similar scenario is shown by the cluster mean distributions (i.e., mean item score for each participant), whereas mean-centered item scores are quite normally distributed.
+```{r message=FALSE,warning=FALSE}
+item.desc(diary,vars=c(SD),multilevel=TRUE)
+```
+
+<br>
+
+### 2.5.2. Correlations
+
+Here, we inspect the correlations among the three `SD` items. We can note that the items are **weakly-to-moderately positively intercorrelated**, at both level. As expected, correlations among individual mean scores (Matrix 2) are stronger than correlations between mean-centered scores (Matrix 3). Item `SQ1` shows the lowest correlations with the other items, but its exclusion is not associated by an increase in Cronbach's alpha. Thus, we keep all the four items.
+```{r message=FALSE,warning=FALSE,fig.width=4,fig.height=3}
+corr.matrices(data=diary,text=TRUE,vars=c(SD),cluster="ID")
+
+# alpha for item dropped
+a <- psych::alpha(diary[,SD])
+round(a$total[1:2],2) # Cronbach's alpha
+round(a$alpha.drop[,1:2],2) # alpha for item dropped
+```
+
+<br>
+
+### 2.5.3. MCFA
+
+Here, we conduct a **multilevel confirmatory factor analysis** (MCFA) in compliance with [Kim et al (2016)](#ref) to evaluate the validity of the hypothesized measurement model for `SD` (i.e., assuming either one or two correlated factors at both levels) and the **cross-level isomorphism** of our `SD` measure.
+
+#### 2.5.3.1. Model specification {.tabset .tabset-fade .tabset-pills}
+
+Here, we specify a single-factor multilevel model for `SD` items. Following [Jack & Jorgensen (2017)](#ref), we specify three models assuming `config`ural, `metric`, and `scalar` invariance across clusters, respectively. Moreover, we fit all models both considering the full sample (N = 135) and focusing on participants that provided at least three responses (N = 127). In sum, we specify 3 (i.e., configural, metric, and scalar invariance) x 2 (i.e., full or restricted sample) models. Due to the skewness of sleep items, all models are fitted with the **MLR robust estimator**.
+
+##### N = 134 {.tabset .tabset-fade .tabset-pills}
+```{r }
+dat <- as.data.frame(na.omit(diary[,c("ID",SD)])) # list-wise deletion
+cat("SD: fitting MCFA models on",nrow(dat),"observations from",nlevels(as.factor(as.character(dat$ID))),"participants")
+```
+All models converged normally without warnings. A number of participants (10-to-16%) show no variability in one or more items. **Acceptable fit** indices are shown by both the `config1` and the `metric1` model, whereas the `scalar1` model is rejected. Standardized loadings between .84 and .95 are estimated by the former model.
+```{r }
+# Configural invariance across clusters (unconstrained model)
+config1 <- cfa('level: 1
+                sSD =~ SQ1 + SQ2 + SQ3 + SQ4
+                level: 2
+                tSD =~ SQ1 + SQ2 + SQ3 + SQ4', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(config1, std = TRUE, fit = TRUE)
+
+# Metric invariance across clusters == metric invariance across levels
+metric1 <- cfa('level: 1
+                sSD =~ L1*SQ1 + L2*SQ2 + L3*SQ3 + L4*SQ4
+                ## free and label variances to define factor ICC
+                sSD ~~ NA*sSD + wSD*sSD 
+                level: 2
+                tSD =~ L1*SQ1 + L2*SQ2 + L3*SQ3 + L4*SQ4
+                ## free and label variances to define factor ICC
+                tSD ~~ NA*tSD + bSD*tSD 
+                ## constrain between-level variances to == ICCs
+                bSD == 1 - wSD', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(metric1, std = TRUE, fit = TRUE)
+
+# Scalar invariance across clusters implies Level-2 residual variances == 0
+scalar1 <- cfa('level: 1
+                sSD =~ L1*SQ1 + L2*SQ2 + L3*SQ3 + L4*SQ4
+                ## free and label variances to define factor ICC
+                sSD ~~ NA*sSD + wSD*sSD 
+                level: 2
+                tSD =~ L1*SQ1 + L2*SQ2 + L3*SQ3 + L4*SQ4
+                ## free and label variances to define factor ICC
+                tSD ~~ NA*tSD + bSD*tSD 
+                ## constrain between-level variances to == ICCs
+                bSD == 1 - wSD 
+                ## fixing level-2 residual variances to zero
+                SQ1 ~~ 0*SQ1
+                SQ2 ~~ 0*SQ2
+                SQ3 ~~ 0*SQ3
+                SQ4 ~~ 0*SQ4', data = dat, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(scalar1, std = TRUE, fit = TRUE)
+```
+
+##### N = 129 {.tabset .tabset-fade .tabset-pills}
+```{r }
+# selecting participants with 3+ responses
+sq <- character()
+dat$ID <- as.factor(as.character(dat$ID))                   
+for(ID in levels(dat$ID)){ if(nrow(dat[dat$ID==ID,])>=3){ sq <- c(sq,ID) }}
+dat2 <- dat[dat$ID%in%sq,]
+cat("WL: fitting MCFA models on",nrow(dat2),"observations from",nlevels(as.factor(as.character(dat2$ID))),"participants")
+```
+
+Results are **consistent** with those obtained with the full sample.
+```{r }
+# Configural invariance across clusters (unconstrained model)
+config12 <- cfa('level: 1
+                sSD =~ SQ1 + SQ2 + SQ3 + SQ4
+                level: 2
+                tSD =~ SQ1 + SQ2 + SQ3 + SQ4', data = dat2, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distr
+summary(config12, std = TRUE, fit = TRUE)
+
+# Metric invariance across clusters == metric invariance across levels
+metric12 <- cfa('level: 1
+                sSD =~ L1*SQ1 + L2*SQ2 + L3*SQ3 + L4*SQ4
+                ## free and label variances to define factor ICC
+                sSD ~~ NA*sSD + wSD*sSD 
+                level: 2
+                tSD =~ L1*SQ1 + L2*SQ2 + L3*SQ3 + L4*SQ4
+                ## free and label variances to define factor ICC
+                tSD ~~ NA*tSD + bSD*tSD 
+                ## constrain between-level variances to == ICCs
+                bSD == 1 - wSD', data = dat2, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(metric12, std = TRUE, fit = TRUE)
+
+# Scalar invariance across clusters implies Level-2 residual variances == 0
+scalar12 <- cfa('level: 1
+                sSD =~ L1*SQ1 + L2*SQ2 + L3*SQ3 + L4*SQ4
+                ## free and label variances to define factor ICC
+                sSD ~~ NA*sSD + wSD*sSD 
+                level: 2
+                tSD =~ L1*SQ1 + L2*SQ2 + L3*SQ3 + L4*SQ4
+                ## free and label variances to define factor ICC
+                tSD ~~ NA*tSD + bSD*tSD 
+                ## constrain between-level variances to == ICCs
+                bSD == 1 - wSD 
+                ## fixing level-2 residual variances to zero
+                SQ1 ~~ 0*SQ1
+                SQ2 ~~ 0*SQ2
+                SQ3 ~~ 0*SQ3
+                SQ4 ~~ 0*SQ4', data = dat2, cluster = "ID", 
+                std.lv = TRUE, estimator = "MLR") # standardized latent variables, MLR due to non-normal distribution
+summary(scalar12, std = TRUE, fit = TRUE)
+```
+
+<br>
+
+#### 2.5.3.2. Model fit  {.tabset .tabset-fade .tabset-pills}
+
+Here, we inspect the model fit of the specified MCFA models. According to [Hu and Bentler (1999)](#ref), we consider RMSEA ≤ .06, CFI ≥ .95, and SRMR ≤ .08 as indicative of adequate fit. Robust RMSEA and CFI indices are considered accounting for the non-normality of workaholism item scores.
+
+##### N = 134
+
+In the full sample, **satisfactory fit is shown by one-factor model assuming metric invariance** `metric1` across clusters (i.e., weak invariance across levels), as also indicated by both information criteria. In contrast, although the `config1` model shows better CFI and SRMR indices than the selected model, its RMSEA value is quite above the considered cut-off. Finally, the `scalar1` model is rejected.
+```{r }
+## compare fit (considering robust fit indices)
+fit.ind(model=c(config1,metric1,scalar1),models.names=c("1F_config","1F_metric","1F_scalar"),robust=TRUE)
+```
+
+<br>
+
+##### N = 129
+
+The results obtained on the subsample of participants with at least 3 responses to sleep items are **highly similar to those obtained with the full sample**.
+```{r }
+## compare fit (considering robust fit indices)
+fit.ind(model=c(config12,metric12,scalar12),models.names=c("1F_config","1F_metric","1F_scalar"),robust=TRUE)
+```
+
+<br>
+
+### 2.5.4. Reliability {.tabset .tabset-fade .tabset-pills}
+
+#### N = 135
+
+Here, we inspect the level-specific reliability based on the selected MCFA model `metric1`, considering coefficients higher than .60 as signs of adequate reliability. We can note that the measure shows **adequate reliability at both levels**.
+```{r }
+data.frame(measure=c("Sleep disturbances"),
+           omega_w=MCFArel(fit=metric1,level=1,items=1:4,item.labels=SD),
+           omega_b=MCFArel(fit=metric1,level=2,items=1:4,item.labels=SD))
+```
+
+<br>
+
+#### N = 127
+
+Results are identical to those obtained with the full sample.
+```{r }
+data.frame(measure=c("Sleep disturbances"),
+           omega_w=MCFArel(fit=metric12,level=1,items=1:4,item.labels=SD),
+           omega_b=MCFArel(fit=metric12,level=2,items=1:4,item.labels=SD))
+```
+
+<br>
+
+# 3. Aggregated scores
+
+Here, we compute and plot the aggregated score for each considered scale.
+```{r, fig.width=10,fig.height=4}
+# computing aggregate score of diary scales = average
+diary$WHLSM <- apply(diary[,WHLSM],1,mean,na.rm=TRUE) # state workaholism
+diary$EE <- apply(diary[,EE[2:4]],1,mean,na.rm=TRUE) # emotional exhaustion (only item 2, 3, and 4)
+diary$PD <- apply(diary[,PD],1,mean,na.rm=TRUE) # psychological detachment
+diary$SD <- apply(diary[,SD],1,mean,na.rm=TRUE) # sleep disturbances
+par(mfrow=c(2,5)); for(Var in c("WHLSM","EE","PD","SD")){ hist(diary[,Var],main=Var)}
+
+# computing aggregate score for working excessively and working compulsively (for robustness check)
+diary$WE <- apply(diary[,paste0("WHLSM",c(1,3,5))],1,mean,na.rm=TRUE) # working excessively
+diary$WC <- apply(diary[,paste0("WHLSM",c(2,4,6))],1,mean,na.rm=TRUE) # working compulsively
+
+# removing raw item scores
+diary[,c(WHLSM,EE,PD,SD)] <- NULL
+
+# sorting diary columns
+diary <- diary[,c(1:which(colnames(diary)=="meal_aft"),which(colnames(diary)=="WHLSM"),
+                  which(colnames(diary)=="WE"),which(colnames(diary)=="WC"),
+                  which(colnames(diary)=="start_eve"):which(colnames(diary)=="dailyHassles_eve"),
+                  which(colnames(diary)=="EE"):which(colnames(diary)=="PD"),
+                  which(colnames(diary)=="start_mor"):which(colnames(diary)=="hhFromAwake"),
+                  which(colnames(diary)=="SD"),
+                  which(colnames(diary)=="gender"):which(colnames(diary)=="weekHours"),
+                  grep("duwas",colnames(diary)))]
+```
+
+<br>
+
+# 4. Data dictionary
+
+Here, , and we provide a definition for each variable in the aggregated dataset.
+```{r }
+str(diary)
+```
+
+<br>
+
+**Identification**
+
+- `ID` = participant's identification code
+
+- `day` = day of participation (from 1 to 11)
+
+<br>
+
+**Compliance**
+
+- `aft` = day including the response to the Afternoon questionnaire (1) or not (0)
+
+- `eve` = day including the response to the Evening questionnaire (1) or not (0)
+
+- `mor` = day including the response to the Morning questionnaire (1) or not (0) 
+
+
+<br>
+
+**Data quality**
+
+- `flagTime` = responses recoded due to wrong response timing (i.e., responses given outside the scheduled intervals) 
+
+- `flagBP_aft` - `flagBP_eve` = flagged cases that were reprocessed due to extreme BP values 
+
+- `careless` = participant flagged as a careless respondent (`careless = TRUE`) due to inconsistent responses in the `DayOff` variables
+
+<br>
+
+**Afternoon questionnaire**
+
+- `start_aft` = starting time of the Afternoon questionnaire (yyyy-mm-dd hh:mm:ss)
+
+- `end_aft` = submission time of the Afternoon questionnaire (yyyy-mm-dd hh:mm:ss)
+
+- `dayOff_aft` = logical variable indicating whether the participant reported working on that day (FALSE) or not (TRUE)
+
+- `SBP_aft` - `DBP_aft` = systolic and diastolic aggregate blood pressure value (mmHg) measured in the Afternoon
+
+- `where_aft` = place where the Afternoon blood pressure recording was done ("home", "workplace", "other")
+
+- `confounders_aft` = logical variable indicating the presence (TRUE) or absence (FALSE) of any confounder before the Afternoon recording
+
+- `coffee_aft` - `meal_aft` = variables indicating the presence (1) or absence (0) of each confounder (i.e., cofee, smoke, sport, and meal)
+
+- `WHLSM` = aggregated (i.e., mean) score at the six workaholism items (1-7)
+
+- `WE` - `WC` = aggregated (i.e., mean) score at the working excessively (1-7) and the working compulsively (1-7) dimensions of the state wrokaholism measure
+
+<br>
+
+**Evening questionnaire**
+
+- `start_eve` = starting time of the Evening questionnaire (yyyy-mm-dd hh:mm:ss)
+
+- `end_eve` = submission time of the Evening questionnaire (yyyy-mm-dd hh:mm:ss)
+
+- `dayOff_eve` = logical variable indicating whether the participant reported working on that day (FALSE) or not (TRUE)
+
+- `SBP_eve` - `DBP_eve` = systolic and diastolic aggregate blood pressure value (mmHg) measured in the Evening
+
+- `confounders_eve` = logical variable indicating the presence (TRUE) or absence (FALSE) of any confounder before the Evening recording
+
+- `coffee_eve` - `meal_eve` = variables indicating the presence (1) or absence (0) of each confounder (i.e., cofee, smoke, sport, and meal)
+
+- `teleWork` = factor indicating whether on that day the participant worked in the "office", did "teleWork", or "both"
+
+- `workHours` = number of working hours for that day (No.)
+
+- `dailyHassless_eve` = factor indicating whether the participant reported some daily hassles outside the working time on that day ("Yes") or not ("No")
+
+- `EE` = aggregated (i.e., mean) score at the four emotional exhaustion items (1-7)
+
+- `PD` = aggregated (i.e., mean) score at the psychological detachment subscale of the Recovery Experience Questionnaire
+
+<br>
+
+**Morning questionnaire**
+
+- `start_mor` = starting time of the Morning questionnaire (yyyy-mm-dd hh:mm:ss)
+
+- `end_mor` = submission time of the Morning questionnaire (yyyy-mm-dd hh:mm:ss)
+
+- `dayOffyesterday` = logical variable indicating whether the participant reported working on the previous day day (FALSE) or not (TRUE)
+
+- `lateWorkHours` = logical variable indicating whether the participant reported working in the previous evening (TRUE) or not (FALSE)
+
+- `wakeTime` = self-reported waking time (yyyy-mm-dd hh:mm:ss)
+
+- `hhFromAwake` = number of hours between waketime and the response to the Morning questionnaire
+
+- `SD` = aggregated (i.e., mean) score at at the Mini Sleep Questionnaire (1-7)
+
+<br>
+
+**Retrospective time-invariant variables** (measured with the preliminary questionnaire)
+
+*Demographics*
+
+-   `gender` = participant’s gender (“F” or “M”)
+
+-   `age` = participant’s age (years)
+
+-   `BMI` = participant’s body mass index (kg/m^2)
+
+-   `edu` = participant’s education level (“middle”, “highschool”, “university+”)
+
+-   `mStatus` = participant’s marital status (“single”, “partner”, “divorced”, “widowed”)
+
+-   `home` = family situation (living “alone” or with “partner”, “children”, “parents”, “others”)
+
+-   `children` = number of children (No.)
+
+-   `home_child` = living with children (Yes/No)
+
+-   `partner` = having a partner (Yes/No)
+
+-   `home_partner` = living with partner (Yes/No)
+
+*Confounders and inclusion criteria*
+
+-   `smoker` = smoking status (“No”, “Yes”, “Quit_less”, “Quit_more”)
+
+-   `bp_drugs` = participant reporting taking blood pressure medications (e.g., diuretics, beta-blokkants, anti-hypertension)
+
+-   `horm_drugs` = participant reporting taking hormonal medications (e.g., birth control)
+
+-   `psy_drugs` = participant reporting taking psychiatric drugs (e.g., antidepressants, anxiety)
+
+-   `cv_dysf` = participant reporting suffering from a cardiovascular disease (e.g., hypertension, ischemia, strokes)
+
+-   `sleep_dysf` = participant reporting suffering from a sleep-related disease (e.g., insomnia, parasomnia, sleep apnea)
+
+*Occupational variables*
+
+-   `job` = participant’s job recoded using the ISCO-08 classification of occupations (level 2) (Ganzeboom, 2010
+
+-   `position` = participant’s job position (“Employee”, “Project”, “Manager”, “(Self-)Employer”)
+
+-   `sector` = participant’s job sector (“Private” or “Public”)
+
+-   `weekHours` = participant’s self-reported mean number of working hours per week (No.)
+    
+-   `dwas1` - `dwas10` = raw item scores at the retrospective version of the Dutch Work Addiction Questionnaire administered in the preliminary questionnaire (1-4)
+
+<br>
+
+# 5. Data export
+
+Here, we export the recoded and pre-processed `diary_wide` dataset (renamed as `diary`) to be used for further analyses. Both datasets are exported in multiple format.
+```{r }
+# exporting diary data
+save(diary,file="DATI/diary_aggregated.RData") # RData
+write.csv2(diary,file="DATI/diary_aggregated.csv", row.names=FALSE) # csv with ";"
+```
+
+<br>
+
+# References {#ref}
+
+- Avanzi, L., Balducci, C., & Fraccaroli, F. (2013). Contributo alla validazione italiana del Copenhagen Burnout Inventory (CBI) [Contribution to the Italian validation of the Copenhagen Burnout Inventory (CBI)]. *Psicologia Della Salute, 2*, 120–135. https://doi.org/10.3280/PDS2013-002008
+
+- Balducci, C., Avanzi, L., Consiglio, C., Fraccaroli, F., & Schaufeli, W. (2017). A Cross-National Study on the Psychometric Quality of the Italian Version of the Dutch Work Addiction Scale (DUWAS). *European Journal of Psychological Assessment, 33*(6), 422–428. https://doi.org/10.1027/1015-5759/
+
+- Kim, E. S., Dedrick, R. F., Cao, C., & Ferron, J. M. (2016). Multilevel Factor Analysis: Reporting Guidelines and a Review of Reporting Practices. *Multivariate Behavioral Research, 51*(6), 0–0. https://doi.org/10.1080/00273171.2016.1228042
+
+- Kristensen, T. S., Borritz, M., Villadsen, E., & Christensen, K. B. (2005). The Copenhagen Burnout Inventory: A new tool for the assessment of burnout. *Work & Stress, 19*(3), 192–207. https://doi.org/10.1080/02678370500297720
+
+- Natale, V., Fabbri, M., Tonetti, L., & Martoni, M. (2014). Psychometric goodness of the Mini Sleep Questionnaire. *Psychiatry and Clinical Neurosciences, 68*(7), 568–573. https://doi.org/10.1111/pcn.12161
+
+- Schaufeli, W. B., Shimazu, A., & Taris, T. W. (2009). Being Driven to Work Excessively Hard. *Cross-Cultural Research, 43*(4), 320–348. https://doi.org/10.1177/1069397109337239
+
+- Rosseel, Y. (2012). lavaan: An R Package for Structural Equation Modeling. *Journal of Statistical Software, 48*(2), 1–36. https://doi.org/10.18637/jss.v048.i02
+
+- Sonnentag, S., & Fritz, C. (2007). The Recovery Experience Questionnaire: Development and validation of a measure for assessing recuperation and unwinding from work. *Journal of Occupational Health Psychology, 12*(3), 204–221. https://doi.org/10.1037/1076-8998.12.3.204
+
+- Zito, M., Molino, M., & Sonnentag, S. (2013). Adattamento italiano del Recovery Experience Questionnaire [Italian Adaptation of the Recovery Experience Questionnaire]. *Giornate Nazionali Di Psicologia Positiva, VI Edizione-PROMUOVERE RISORSE NEL CAMBIAMENTO*, 68–69.
+
+## R packages
