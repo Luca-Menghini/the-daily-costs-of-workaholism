@@ -9,7 +9,7 @@ The present Github repository is associated with the **[Open Science Framework (
 Below, we list and describe the full set of supplementary materials. Click on the highlighted link to visualize the reports.
 
 ## Supplementary materials
-- `S3_dataProcessing`: R code and generated **[full report](https://Luca-Menghini.github.io/the-daily-costs-of-workaholism/S4_psychometrics/S4_psychometrics-code-and-output.html)** of the data pre-processing steps implemented to prepare the raw data for the following analyses. Note that only the anonymized and pre-processed data outputted by this script are available from OSF, in compliance with the GDPR European regulation.
+- `S3_preProcessing`: R code and generated **[full report](https://Luca-Menghini.github.io/the-daily-costs-of-workaholism/S4_psychometrics/S4_psychometrics-code-and-output.html)** of the data pre-processing steps implemented to prepare the raw data for the following analyses. Note that only the anonymized and pre-processed data outputted by this script are available from OSF, in compliance with the GDPR European regulation.
 
 - `S4_psychometrics`: Reproducible pychometric data analysis R code and generated **[full report](https://Luca-Menghini.github.io/the-daily-costs-of-workaholism/S4_psychometrics/S4_psychometrics-code-and-output.html)**
 
