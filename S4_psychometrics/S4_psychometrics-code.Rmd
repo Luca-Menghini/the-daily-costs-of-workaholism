@@ -1,8 +1,9 @@
 ---
 title: "The daily costs of workaholism"
 subtitle: "Supplementary material S4: Psychometrics and data reduction"
+author:  "Luca Menghini, Ph.D., Cristian Balducci, Ph.D."
 date: "`r Sys.Date()`"
-bibliography: [packages.bib]
+bibliography: [packagesPsych.bib]
 nocite: '@*'
 output:
   html_document:
@@ -25,7 +26,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 # Aims and content
 
-The present document includes the analytical steps to analyze the psychometric properties of the diary data collected with the Qualtrics platform (Qualtrics, Seattle, WA, USA) and pre-processed as shown in the [dedicated pre-processing report](link), and to compute the corresponding aggregate scores.
+The present document includes the analytical steps to analyze the psychometric properties of the diary data collected with the Qualtrics platform (Qualtrics, Seattle, WA, USA) and pre-processed as shown in  [Supplementary Material S3](https://Luca-Menghini.github.io/the-daily-costs-of-workaholism/S3_preProcessing/S3_data-processing-code-and-output.html), and to compute the corresponding aggregate scores.
 
 Here, we remove all objects from the R global environment.
 ```{r  }
@@ -39,7 +40,7 @@ The following R packages are used in this document (see [References](#ref) secti
 packages <- c("ggplot2","reshape2","psych","MVN","Rmisc","lavaan","lme4","MuMIn")
 
 # generate packages references
-knitr::write_bib(c(.packages(), packages),"packages.bib")
+knitr::write_bib(c(.packages(), packages),"packagesPsych.bib")
 
 # # run to install missing packages
 # xfun::pkg_attach2(packages, message = FALSE); rm(list=ls())
@@ -49,7 +50,7 @@ knitr::write_bib(c(.packages(), packages),"packages.bib")
 
 # 1. Data reading
 
-First, we read the **daily diary** `diary` datasets pre-processed as shown in the [dedicated pre-processing report](link).
+First, we read the **daily diary** `diary` datasets pre-processed as shown in  [Supplementary Material S3](https://Luca-Menghini.github.io/the-daily-costs-of-workaholism/S3_preProcessing/S3_data-processing-code-and-output.html).
 ```{r  }
 # loading data
 load("DATI/diary_processed.RData") 
@@ -72,7 +73,7 @@ The considered scales among those included in the daily diaries are:
 
 - the 4 **Sleep Disturbances** `SD` items adapted from the Mini Sleep Questionnaire ([Natale et al., 2014](#ref))
 
-As pre-registered [here](https://osf.io/h9zvq?view_only=9ee67d87b67a4005a85f86939bd267c4), the construct validity of the considered scales is evaluated by conducting a separate **Multilevel Confirmatory Factor Analyse**s (MCFAs) for each scale, following [Kim et al 2016](#ref), and using the `lavaan` R package [(Rosseel, 2012)](#ref).
+As pre-registered [here](https://osf.io/h9zvq), the construct validity of the considered scales is evaluated by conducting a separate **Multilevel Confirmatory Factor Analyse**s (MCFAs) for each scale, following [Kim et al 2016](#ref), and using the `lavaan` R package [(Rosseel, 2012)](#ref).
 
 The following packages and functions are used to optimize the analyses:
 ```{r warning=FALSE,message=FALSE}
@@ -1326,7 +1327,7 @@ fit.ind(model=c(config12.fix,config22),models.names=c("One-factor","Two-factor")
 
 Only a single-factor model is specified for the three daily sleep disturbances `SD` items.
 ```{r }
-# selecting WL items
+# selecting SD items
 (SD <- paste("SQ",1:4,sep=""))
 ```
 <br>
@@ -1526,17 +1527,22 @@ diary$PD <- apply(diary[,PD],1,mean,na.rm=TRUE) # psychological detachment
 diary$SD <- apply(diary[,SD],1,mean,na.rm=TRUE) # sleep disturbances
 par(mfrow=c(2,5)); for(Var in c("WHLSM","EE","PD","SD")){ hist(diary[,Var],main=Var)}
 
+# computing aggregate score for working excessively and working compulsively (for robustness check)
+diary$WE <- apply(diary[,paste0("WHLSM",c(1,3,5))],1,mean,na.rm=TRUE) # working excessively
+diary$WC <- apply(diary[,paste0("WHLSM",c(2,4,6))],1,mean,na.rm=TRUE) # working compulsively
+
 # removing raw item scores
 diary[,c(WHLSM,EE,PD,SD)] <- NULL
 
 # sorting diary columns
 diary <- diary[,c(1:which(colnames(diary)=="meal_aft"),which(colnames(diary)=="WHLSM"),
+                  which(colnames(diary)=="WE"),which(colnames(diary)=="WC"),
                   which(colnames(diary)=="start_eve"):which(colnames(diary)=="dailyHassles_eve"),
                   which(colnames(diary)=="EE"):which(colnames(diary)=="PD"),
-                  which(colnames(diary)=="start_mor"):which(colnames(diary)=="dayOffyesterday"),
-                  which(colnames(diary)=="where_mor"):which(colnames(diary)=="hhFromAwake"),
+                  which(colnames(diary)=="start_mor"):which(colnames(diary)=="hhFromAwake"),
                   which(colnames(diary)=="SD"),
-                  which(colnames(diary)=="gender"):which(colnames(diary)=="workTime"))]
+                  which(colnames(diary)=="gender"):which(colnames(diary)=="weekHours"),
+                  grep("duwas",colnames(diary)))]
 ```
 
 <br>
@@ -1573,9 +1579,9 @@ str(diary)
 
 - `flagTime` = responses recoded due to wrong response timing (i.e., responses given outside the scheduled intervals) 
 
-- `flagBP_aft` - `flagBP_mor` = flagged cases that were reprocessed due to extreme BP values 
+- `flagBP_aft` - `flagBP_eve` = flagged cases that were reprocessed due to extreme BP values 
 
-- `careless` = participant flagged as a careless respondent (`careless = TRUE`) due to inconsistent responses in the `DayOff` variables - the same variable is included in the `prelqs` dataset
+- `careless` = participant flagged as a careless respondent (`careless = TRUE`) due to inconsistent responses in the `DayOff` variables
 
 <br>
 
@@ -1591,11 +1597,13 @@ str(diary)
 
 - `where_aft` = place where the Afternoon blood pressure recording was done ("home", "workplace", "other")
 
-- `confounders_aft` = logical variable indicating the presence (TRUE) or absence (FALSE) of any confounder before the Afternoon recording <span style="color: red;">Questa andrebbe inserita in tutti i modelli che predicono la pressione del pomeriggio</span>
+- `confounders_aft` = logical variable indicating the presence (TRUE) or absence (FALSE) of any confounder before the Afternoon recording
 
 - `coffee_aft` - `meal_aft` = variables indicating the presence (1) or absence (0) of each confounder (i.e., cofee, smoke, sport, and meal)
 
 - `WHLSM` = aggregated (i.e., mean) score at the six workaholism items (1-7)
+
+- `WE` - `WC` = aggregated (i.e., mean) score at the working excessively (1-7) and the working compulsively (1-7) dimensions of the state wrokaholism measure
 
 <br>
 
@@ -1609,7 +1617,7 @@ str(diary)
 
 - `SBP_eve` - `DBP_eve` = systolic and diastolic aggregate blood pressure value (mmHg) measured in the Evening
 
-- `confounders_eve` = logical variable indicating the presence (TRUE) or absence (FALSE) of any confounder before the Evening recording <span style="color: red;">Questa andrebbe inserita in tutti i modelli che predicono la pressione della sera</span>
+- `confounders_eve` = logical variable indicating the presence (TRUE) or absence (FALSE) of any confounder before the Evening recording
 
 - `coffee_eve` - `meal_eve` = variables indicating the presence (1) or absence (0) of each confounder (i.e., cofee, smoke, sport, and meal)
 
@@ -1635,43 +1643,73 @@ str(diary)
 
 - `lateWorkHours` = logical variable indicating whether the participant reported working in the previous evening (TRUE) or not (FALSE)
 
-- `dailyHassless_mor` = factor indicating whether the participant reported some daily hassles outside the working time on that day ("Yes") or not ("No")
-
 - `wakeTime` = self-reported waking time (yyyy-mm-dd hh:mm:ss)
 
-- `hhFromAwake` = number of hours between waketime and the response to the Morning questionnaire <span style="color: red;">Questa andrebbe inserita in tutti i modelli che predicono la pressione della mattina</span>
+- `hhFromAwake` = number of hours between waketime and the response to the Morning questionnaire
 
 - `SD` = aggregated (i.e., mean) score at at the Mini Sleep Questionnaire (1-7)
 
 <br>
 
-**Retrospective variables**
+**Retrospective time-invariant variables** (measured with the preliminary questionnaire)
 
-- `gender` - `workTime` = level-2 (individual) variables measured with the preliminary questionnaire - i.e., the same variables included in the `prelqs` dataset (see below) whose values are identical over the rows associated with the same participant <span style="color: red;">Tra cui anche le variabili che determinano i criteri di inclusione in base alla variabile considerata - vedi sopra sezione 5.1</span>
+*Demographics*
+
+-   `gender` = participant’s gender (“F” or “M”)
+
+-   `age` = participant’s age (years)
+
+-   `BMI` = participant’s body mass index (kg/m^2)
+
+-   `edu` = participant’s education level (“middle”, “highschool”, “university+”)
+
+-   `mStatus` = participant’s marital status (“single”, “partner”, “divorced”, “widowed”)
+
+-   `home` = family situation (living “alone” or with “partner”, “children”, “parents”, “others”)
+
+-   `children` = number of children (No.)
+
+-   `home_child` = living with children (Yes/No)
+
+-   `partner` = having a partner (Yes/No)
+
+-   `home_partner` = living with partner (Yes/No)
+
+*Confounders and inclusion criteria*
+
+-   `smoker` = smoking status (“No”, “Yes”, “Quit_less”, “Quit_more”)
+
+-   `bp_drugs` = participant reporting taking blood pressure medications (e.g., diuretics, beta-blokkants, anti-hypertension)
+
+-   `horm_drugs` = participant reporting taking hormonal medications (e.g., birth control)
+
+-   `psy_drugs` = participant reporting taking psychiatric drugs (e.g., antidepressants, anxiety)
+
+-   `cv_dysf` = participant reporting suffering from a cardiovascular disease (e.g., hypertension, ischemia, strokes)
+
+-   `sleep_dysf` = participant reporting suffering from a sleep-related disease (e.g., insomnia, parasomnia, sleep apnea)
+
+*Occupational variables*
+
+-   `job` = participant’s job recoded using the ISCO-08 classification of occupations (level 2) (Ganzeboom, 2010
+
+-   `position` = participant’s job position (“Employee”, “Project”, “Manager”, “(Self-)Employer”)
+
+-   `sector` = participant’s job sector (“Private” or “Public”)
+
+-   `weekHours` = participant’s self-reported mean number of working hours per week (No.)
+    
+-   `dwas1` - `dwas10` = raw item scores at the retrospective version of the Dutch Work Addiction Questionnaire administered in the preliminary questionnaire (1-4)
 
 <br>
 
 # 5. Data export
 
-Here, we export the recoded and pre-processed `diary_wide` dataset (renamed as `diary`) and the `prelqs` dataset to be used for further analyses. Both datasets are exported in multiple format.
+Here, we export the recoded and pre-processed `diary_wide` dataset (renamed as `diary`) to be used for further analyses. Both datasets are exported in multiple format.
 ```{r }
 # exporting diary data
 save(diary,file="DATI/diary_aggregated.RData") # RData
 write.csv2(diary,file="DATI/diary_aggregated.csv", row.names=FALSE) # csv with ";"
-```
-
-<br>
-
-## 5.1. Mplus .dat
-
-Finally, we generate and export the `diary` dataset (one row per day) as a *.dat* file to be read with Mplus. This is done with the `MplusAutmation` package, which also allows to export the input syntax.
-```{r warning=FALSE,message=FALSE}
-library(MplusAutomation)
-prepareMplusData(diary,filename="DATI/diary_aggregated.dat", # path of tab-delimited data file to be exported
-                 dropCols=c("start_aft","start_eve","start_mor","wakeTime", # removing timestamp variables
-                            "end_aft","end_eve","end_mor"), #
-                 inpfile = TRUE, # print mplus input syntax in the console?
-                 interactive = FALSE,overwrite = TRUE,imputed = FALSE,writeData = "always",hashfilename = FALSE)
 ```
 
 <br>
@@ -1696,3 +1734,4 @@ prepareMplusData(diary,filename="DATI/diary_aggregated.dat", # path of tab-delim
 
 - Zito, M., Molino, M., & Sonnentag, S. (2013). Adattamento italiano del Recovery Experience Questionnaire [Italian Adaptation of the Recovery Experience Questionnaire]. *Giornate Nazionali Di Psicologia Positiva, VI Edizione-PROMUOVERE RISORSE NEL CAMBIAMENTO*, 68–69.
 
+## R packages

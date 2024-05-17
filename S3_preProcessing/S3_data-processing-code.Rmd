@@ -1,0 +1,1966 @@
+---
+title: "The daily costs of workaholism"
+subtitle: "Supplementary material S3: Data pre-processing"
+author:  "Luca Menghini, Ph.D., Cristian Balducci, Ph.D."
+date: "`r Sys.Date()`"
+bibliography: [packagesProc.bib]
+nocite: '@*'
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    css: styles.css
+    code_download: true
+  pdf_document: default
+  word_document: default
+  theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<br>
+
+# Aims and content
+
+The present document includes the pre-processing steps to read the intensive longitudinal data collected with the Qualtrics platform (Qualtrics, Seattle, WA, USA) and prepare them from the analyses. The data were collected from a sample of full-time workers (mainly office
+workers) that responded to a preliminary questionnaire `prelqs` followed by a one- or two-week daily diary protocol `diary`.
+
+Here, we remove all objects from the R global environment, and we set the system time zone.
+
+``` {r}
+# removing all objets from the workspace
+rm(list=ls())
+
+# setting system time zone to GMT (for consistent temporal synchronization)
+Sys.setenv(tz="GMT")
+```
+
+The following R packages are used in this document (see [References](#ref) section):
+
+``` {r}
+# required packages
+packages <- c("lubridate","ggplot2","gridExtra","plyr","labourR","data.table","magrittr")
+
+# generate packages references
+knitr::write_bib(c(.packages(), packages),"packagesProc.bib")
+
+# # run to install missing packages
+# xfun::pkg_attach2(packages, message = FALSE); rm(list=ls())
+```
+
+<br>
+
+# 1. Data reading
+
+First, we read **preliminary questionnaire** `prelqs` data exported from Qualtrics (available upon request to the main author).
+
+``` {r}
+# loading preliminary questionnaire dataset (skipping first two lines including unuseful information))
+prelqs <- read.csv("DATI/WHLSM2021 - prelQS.csv", 
+                   na.strings="")[3:nrow(read.csv("DATI/WHLSM2021 - prelQS.csv")),]
+
+# removing 1 case with missing values to all items
+prelqs <- prelqs[!is.na(prelqs$gender),]
+
+# removing 1 case with no e-mail address (i.e., no identification code)
+prelqs <- prelqs[!is.na(prelqs$RecipientEmail),]
+```
+
+<br>
+
+Second, we read the `diary` datasets exported from Qualtrics as CSV files with numeric values (available upon request to the main author). A separate diary survey (resulting in a separate dataset) was used for afternoon `_a`, evening `_e`, and morning `_m` diaries, respectively. Moreover, a separate survey was used for Saturday morning (`_m_sat`), and surveys sometimes (i.e., in case of techical problems with the smartphones), they administered by sending anonymized links including an e-mail field: `_mail`.
+
+``` {r}
+# loading diary datasets
+diary_a <- read.csv("DATI/WEEK40/WHLSM2021_DiaryAfternoon.csv",
+                    na.strings="")[3:nrow(read.csv("DATI/WEEK40/WHLSM2021_DiaryAfternoon.csv")),] # diary_a = Afternoon (after work)
+diary_e <- read.csv("DATI/WEEK40/WHLSM2021_DiaryEvening.csv",
+                    na.strings="")[3:nrow(read.csv("DATI/WEEK40/WHLSM2021_DiaryEvening.csv")),] # diary_e = Evening (bedtime)
+diary_m <- read.csv("DATI/WEEK40/WHLSM2021_DiaryMorning.csv", 
+                    na.strings="")[3:nrow(read.csv("DATI/WEEK40/WHLSM2021_DiaryMorning.csv")),] # diary_m = Morning (before work)
+diary_m_sat <- read.csv("DATI/WEEK40/WHLSM2021_DiaryMorning_sat.csv",
+                    na.strings="")[3:nrow(read.csv("DATI/WEEK40/WHLSM2021_DiaryMorning_sat.csv")),] # diary_m_sat = Saturday Morning
+
+# loading diary datasets with e-mail field (used in cases of technical problems)
+diary_m_mail <- read.csv("DATI/WEEK40/WHLSM2021_DiaryMorning_mail.csv",
+                         na.strings="")[3:nrow(read.csv("DATI/WEEK40/WHLSM2021_DiaryMorning_mail.csv")),]
+diary_a_mail <- read.csv("DATI/WEEK40/WHLSM2021_DiaryAfternoon_mail.csv",
+                         na.strings="")[3:nrow(read.csv("DATI/WEEK40/WHLSM2021_DiaryAfternoon_mail.csv")),]
+diary_e_mail <- read.csv("DATI/WEEK40/WHLSM2021_DiaryEvening_mail.csv",
+                         na.strings="")[3:nrow(read.csv("DATI/WEEK40/WHLSM2021_DiaryEvening_mail.csv")),]
+diary_m_sat_mail <- read.csv("DATI/WEEK40/WHLSM2021_DiaryMorning_sat_mail.csv",
+                             na.strings="")[3:nrow(read.csv("DATI/WEEK40/WHLSM2021_DiaryMorning_sat_mail.csv")),]
+```
+
+<br>
+
+# 2. Data recoding
+
+Second, we recode the two datasets by removing unuseful columns, by re-setting variable labels and classes, by renaming relevant columns, and by merging the `diary` datasets.
+
+## 2.1. Preliminary questionnaire
+
+Here, we remove the unuseful columns, and we rename and sort the relevant columns of the `prelqs` dataset.
+``` {r}
+# removing unuseful columns
+prelqs[,c("Status","IPAddress","Progress","Duration..in.seconds.","Finished","RecordedDate","ResponseId",
+          "RecipientLastName","RecipientFirstName","LocationLatitude","LocationLongitude",
+          "DistributionChannel","UserLanguage","consent")] <- NULL
+
+# renaming variables
+colnames(prelqs)[1:4] <- c("start","end","ID","recruiter.ID") # participant's identifier (e-mail)
+colnames(prelqs)[1:which(colnames(prelqs)=="children_1")] <- # removing question numbers from column names
+  gsub("_4","",gsub("_1","",colnames(prelqs)[1:which(colnames(prelqs)=="children_1")]))
+colnames(prelqs)[which(substr(colnames(prelqs),1,2)=="EX")] <- paste("EX",1:7,sep="_") # recoding question numbers for EX scale
+```
+
+<br>
+
+Then, we change the classes of the relevant variables by converting dates as `POSIXct` (the R format for dates and times), categorical variables as `factor`, and quantitative variables as `integer` or `numeric`.
+``` {r}
+# time (POSIXct variables): start, end
+prelqs$start <- as.POSIXct(prelqs$start)
+prelqs$end <- as.POSIXct(prelqs$end)
+
+# integer: age, WHLSM, WA, OC, WE, EX, WL, WFC, OWC, TS, NA
+prelqs[,c(which(colnames(prelqs)=="age"),which(colnames(prelqs)=="WHLSM_1"):which(colnames(prelqs)=="NA_4"))] <-
+  lapply(prelqs[,c(which(colnames(prelqs)=="age"),which(colnames(prelqs)=="WHLSM_1"):which(colnames(prelqs)=="NA_4"))],as.integer)
+
+# numeric: weekHours, weekHours_remote
+colnames(prelqs)[which(substr(colnames(prelqs),1,4)=="week")] <- c("weekHours","weekHours_remote")
+prelqs[,c("weight","height","weekHours","weekHours_remote")] <-
+  lapply(prelqs[,c("weight","height","weekHours","weekHours_remote")],as.numeric)
+
+# factors: all other variables
+prelqs[,c("recruiter.ID","gender","edu","mStatus","home","children","smoker","drugs_1","drugs_2","drugs_3",
+          "disfunctions_1","disfunctions_2","position","sector")] <-
+  lapply(prelqs[,c("recruiter.ID","gender","edu","mStatus","home","children","smoker","drugs_1","drugs_2","drugs_3",
+                   "disfunctions_1","disfunctions_2","position","sector")],as.factor)
+```
+
+<br>
+
+We also recode the levels and values of sociodemographic variables as we preregistered (see [preregistration here](https://osf.io/h9zvq)).
+``` {r}
+# gender: F, M, (Other)
+prelqs$gender <- as.factor(gsub("1","M",gsub("2","F",gsub("3","Other",prelqs$gender))))
+if(nlevels(prelqs$gender)==2){ cat("Recoding as M/F since nobody chose gender='Other'") 
+  prelqs$gender <- factor(prelqs$gender,levels=c("F","M")) }
+
+# education: highschool or lower vs. university or higher
+prelqs$edu <- as.factor(gsub("1","highschool-",gsub("2","highschool-",gsub("3","university+",prelqs$edu))))
+
+# children: yes/no
+prelqs[prelqs$children!=0,"children"] <- 1
+prelqs$children <- as.factor(gsub("0","No",gsub("1","Yes",prelqs$children))) # having a children
+
+# home situation: alone, partner, children, parents, others
+prelqs$home <- gsub("1","partner",gsub("2","parents",gsub("3","children",gsub("4","alone",gsub("5","others",prelqs$home)))))
+prelqs$home <- factor(gsub("partner,alone","partner", # partner and alone = partner
+                           gsub("partner,others","partner", # partner and others = partner
+                                gsub("partner,children","children", # if children = children
+                                     gsub("alone,others","others", # alone and others = others
+                                          gsub("partner,parents","partner",prelqs$home))))), # partner and parents = partner
+                      levels=c("alone","partner","children","parents","others")) 
+
+# children in the household: yes/no
+prelqs$home_child <- as.factor(gsub("alone","No", # 
+                                   gsub("partner","No",
+                                        gsub("children","Yes",
+                                             gsub("parents","No",
+                                                  gsub("others","No",prelqs$home))))))
+
+# marital status: single, partner, divorced, widowed
+prelqs$mStatus <- factor(gsub("1","single",gsub("2","partner",gsub("3","divorced",gsub("4","widowed",prelqs$mStatus)))),
+                         levels=c("single","partner","divorced","widowed"))
+
+# having a partner
+prelqs$partner <- as.factor(gsub("single","No",
+                                gsub("partner","Yes",
+                                     gsub("divorced","No",
+                                          gsub("widowed","No",prelqs$mStatus))))) 
+
+# living with partner
+prelqs$home_partner <- as.factor(gsub("alone","No", # living with partner
+                                     gsub("partner","Yes",
+                                          gsub("children","No",
+                                               gsub("parents","No",
+                                                    gsub("others","No",prelqs$home))))))
+
+# smoking status: Yes/No
+prelqs$smoker <- factor(gsub("1","Yes",gsub("2","Quit_less",gsub("3","Quit_more",gsub("4","No",prelqs$smoker)))),
+                        levels=c("No","Yes","Quit_less","Quit_more"))
+prelqs$smoker <- as.factor(gsub("Quit_less","Yes",gsub("Quit_more","No",prelqs$smoker)))
+
+# drugs/medications
+colnames(prelqs)[which(substr(colnames(prelqs),1,5)=="drugs")] <- c("bp_drugs","horm_drugs","psy_drugs") # drugs/medications
+prelqs$bp_drugs <- as.factor(gsub("1","Yes",gsub("2","No",prelqs$bp_drugs)))
+prelqs$horm_drugs <- as.factor(gsub("1","Yes",gsub("2","No",prelqs$horm_drugs)))
+prelqs$psy_drugs <- as.factor(gsub("1","Yes",gsub("2","No",prelqs$psy_drugs)))
+
+# cardiovascular and sleep dysfunctions
+colnames(prelqs)[which(substr(colnames(prelqs),1,5)=="disfu")] <- c("cv_dysf","sleep_dysf")
+prelqs$cv_dysf <- as.factor(gsub("1","Yes",gsub("2","No",prelqs$cv_dysf)))
+prelqs$sleep_dysf <- as.factor(gsub("1","Yes",gsub("2","No",prelqs$sleep_dysf)))
+
+# job position: employee or project vs. manager or self-employed/employer
+prelqs$position <- factor(gsub("1","Manager/Employers",
+                               gsub("2","Employee",
+                                    gsub("3","Manager/Employers",
+                                         gsub("4","Project",
+                                              prelqs$position)))),
+                          levels=c("Employee","Manager/Employers","Project"))
+
+# job sector: public vs. private
+prelqs$sector <- as.factor(gsub("1","Public",gsub("2","Private",prelqs$sector)))
+
+# remotePlace (open-ended question -> making it categorical)
+prelqs$remotePlace <- factor(gsub("casa","home",
+                                  gsub("acasa","casa",
+                                       gsub("dacasa","casa",
+                                            gsub("acasa/inco-wo","casa",
+                                                 gsub("studioausl","studio",
+                                                      gsub("ufficio","studio",
+                                                           gsub("ospedale","studio",
+                                                                gsub("officina","studio",
+                                                                     gsub("instudioinvideocall","studio",
+                                                                          gsub("nessuno","0",
+                                                                               gsub("nessuni","0",
+                                            gsub("\\.","",gsub(" ","",tolower(prelqs$remotePlace)))))))))))))),
+                             levels=c("0","home","studio"))
+
+# from height and weight to BMI
+prelqs[prelqs$height<3,"height"] <- prelqs[prelqs$height<3,"height"]*100 # correcting heights reported in meters
+prelqs$BMI <- prelqs$weight/(prelqs$height/100)^2 # BMI = kg/m^2
+prelqs <- prelqs[,c(1:which(colnames(prelqs)=="age"), # removing height and weight
+                    ncol(prelqs),which(colnames(prelqs)=="edu"):(ncol(prelqs)-1))]
+```
+
+<br>
+
+### 2.1.1. Recoding jobs
+
+Here, the `job.recode()` function is used to recode the open-ended `job` item responses by using the **ISCO-08 classification of occupations (level 2)** ([Ganzeboom, 2010](#ref)). The function is based on the `labouR` package integrated with some manual recoding. The open-ended responses are then removed for privacy reasons.
+
+<details><summary>`job.recode()`</summary>
+<p>
+``` {r}
+job.recode <- function(data){ require(labourR); require(data.table); require(magrittr)
+
+  # creating corpus data
+  corpus <- data.table(ID=data$ID,text=data$job,edu=data$edu,pos=data$position,lang="it")
+  languages <- unique(corpus$language) # language classes
+  
+  # first screening based on the labourR::classify_occupation() function
+  suggestions <- classify_occupation(corpus=corpus,id_col="ID",text_col="text",lang="it",isco_level=2,num_leaves=10)
+  corpus <- plyr::join(corpus,suggestions,by="ID",type="left")
+  
+  # adjusting automatic classification based on manual screening
+  corpus[corpus$text%in%c("Responsabile sistemi informativi",
+                          "Responsabile di un piccolo museo e operatrice museale e teatrale nelle scuole"),
+         "preferredLabel"] <- 
+    "Legal, social and cultural professionals"
+  corpus[corpus$text%in%c("Funzionario Tecnico pubblica amministrazione "),
+         "preferredLabel"] <- 
+    "Legal, social and cultural professionals"
+  corpus[corpus$text%in%c("Banca - Responsabile Organizzazione",
+                          "addetta amministrazione e amministratore di azienda in proprio",
+                          "Commercialista"),
+         "preferredLabel"] <- 
+    "Business and administration professionals"
+  corpus[corpus$text%in%c("Lavoro nella segreteria di una Scuola Secondaria di Primo Grado come amministrativa. Mi occupo di questioni burocratiche e organizzative, gestisco soprattutto circolari e domande di iscrizione, nulla osta, ecc. Al momento gestisco anche il controllo dei Green Pass e le varie procedure da seguire.",
+                          "Attività amministrativa di ufficio e front Office ",
+                          "impiegata commerciale",
+                          "impiegata nel settore amministrativo",
+                          "Addetta back office presso agenzia di somministrazione"),
+         "preferredLabel"] <- 
+    "Business and administration associate professionals"
+  corpus[corpus$text%in%c("direzione piccola azienda",
+                          "Dirigente d'azienda ",
+                          "Dirigente multinazionale digital marketing",
+                          "Founder brand moda ",
+                          "Imprenditore nel settore degli alberghi, gestione di un hotel di 45 camere più sala ristorante. Gestione di 9 dipendenti, rapporti con fornitori e piattaforme online. Gestione della contabilità. Occasionalmente docente presso Cescot Rimini, corsi di formazione.",
+                          "Imprenditore di carpenteria metallica ",
+                          "Imprenditrice"),
+         "preferredLabel"] <- 
+    "Chief executives, senior officials and legislators"
+  corpus[corpus$text%in%c("attività di ricerca presso università",
+                          "Dottorando di Ricerca",
+                          "Dottorato di ricerca",
+                          "Sono un geometra contabile. Il mio lavoro consiste nel tenere traccia di tutte le lavorazioni che svolgono gli operai sui vari cantieri, dopodiché realizzo dei report fotografici e contabili per il mio datore di lavoro. \nGli operai mi inviano giornalmente le foto per realizzare i report, dalle foto ne ricavo le misure delle lavorazioni eseguite. In base alle misurazioni effettuate eseguo dei disegni contabili e realizzo un computo metrico dove controllo i costi delle lavorazioni eseguite e verifico che non superiamo il budget prefissato.",
+                          "Artigiano idraulico elettricista",
+                          "Geometra libero professionista"),
+         "preferredLabel"] <- 
+    "Science and engineering associate professionals"
+  corpus[corpus$text%in%c("radiologo, analisi immagini alla workstation (computer) alternato a periodi di studio al computer e esecuzione di ecografie ",
+                          "riabilitazione della voce e della deglutizione per adulti operati delle corde vocali",
+                          "Psicoterapeuta presso il mio studio privato. L'attività che svolgo si rivolge ad adulti e adolescenti, quasi esclusivamente in presenza, in sedute di circa 1 h ciascuna. A ciò si aggiunge il lavoro di fatturazione, formazione e aggiornamento, gestione pratica dello studio (Back office)",
+                          "infermiere coordinatore",
+                          "Psichiatra psicoterapeuta "),
+         "preferredLabel"] <- 
+    "Health professionals"
+  corpus[corpus$text%in%c("Odontotecnico da libero professionista, ",
+                          "operatore socio sanitario",
+                          "Tutor ABA: mi occupo dell'applicazione di procedure e strategie comportamentali per bambini con Disturbo dello spettro autistico, all'interno di un rapporto 1:1.\nDurante la sessione di lavoro è necessario costruire una buona relazione con il bambino con spettro autistico e la sua famiglia; prendere a mano note per ciascuna sessione, inserire i dati in un database; osservare il comportamento del bambino e quindi applicare una strategia idonea; monitorare gli esiti dell’intervento da condividere successivamente con il supervisore ABA, nell'ottica di una riformulazione della programmazione da implementare per quel bambino.\n"),
+         "preferredLabel"] <- 
+    "Health associate professionals"
+  corpus[corpus$text%in%c("Coordinatore unità operativa in un servizio di  integrazione socio sanitaria in salute mentale. Coordinatore unità operativa per soggetti svantaggiati e disabili nel cooperativismo. Consigliere CDA in Cooperativa. Cultore della materia in facoltà universitaria.",
+                          "Psicologa infantile, Progettista sociale, Coordinatrice Centro Famiglie",
+                          "Traduttrice, addetta stampa, content creator",
+                          "project manager e consulente aziendale rispetto alla psicologia clinica, psicologia organizzazioni e psicologia emergeza"),
+         "preferredLabel"] <- 
+    "Legal, social and cultural professionals"
+  corpus[corpus$text%in%c("Energy Back Office Specialist (Addetto al Billing Gas)",
+                          "Solgo 2 lavori:\nLibera professione, svolgo attività di impresa nelle società con mio fratello nel campo architettura, immobiliare e turistico \nResponsabile ricerca e sviluppo (con orari flessibili) x un quartiere fieristico"),
+         "preferredLabel"] <- 
+    "Science and engineering professionals"
+  corpus[corpus$text%in%c("Doposcuola ",
+                          "Educatrice all'interno di una scuora superiore."),
+         "preferredLabel"] <- 
+    "Teaching professionals"
+  corpus[corpus$text%in%c("TITOLARE DI IMPRESA DI PULIZIE"),
+         "preferredLabel"] <- 
+    "Personal service workers"
+  corpus[corpus$text%in%c("Programmatore",
+                          "Coach di E-Sports, alleno dei giocatori di videogiochi attraverso dei campioni professionistici"),
+         "preferredLabel"] <- 
+    "Information and communications technology professionals"
+  
+  # merging corpus with data
+  corpus$ID <- as.factor(corpus$ID)
+  data <- plyr::join(data,corpus[,c("ID","preferredLabel")],by="ID",type="left")
+  
+  # replacing original job with recoded job categories
+  data$job <- as.factor(data$preferredLabel)
+  data$preferredLabel <- NULL # removing preferredLabel
+  data$ID <- as.factor(data$ID)
+  
+  # summarizing info
+  cat("Recoded job variable into",nlevels(data$job),"categories:\n")
+  print(summary(data[!is.na(data$job),"job"]))
+  return(data) }
+```
+</p>
+</details>
+
+``` {r message=FALSE, warning=FALSE}
+prelqs <- job.recode(prelqs)
+```
+
+<br>
+
+### 2.1.2. recoding workTime
+
+Then, we recode the `workTime` variable, which was measured with an open-ended question as well.
+``` {r}
+# all lower case letters
+workTimes <- wt.min <- wt.max <- tolower(prelqs$workTime)
+
+# categorizing work start time
+wt.min[grep("6:",wt.min)] <- # ............. # 6/7 = starting between 6:00 AM and 7:59 AM
+  wt.min[grep("6.",wt.min)] <-  
+  wt.min[grep("7:",wt.min)] <- 
+  wt.min[grep("7.",wt.min)] <- "6/7"
+wt.min[grep("8:",wt.min)] <- # ............... # 8 = starting between 8:00 AM and 8:59 AM
+  wt.min[grep("8.",wt.min)] <-  "8"
+wt.min[grep("9:",wt.min)] <- # ............ # 9/10 = starting between 9:00 AM and 9:59 AM
+  wt.min[grep("9.",wt.min)] <- 
+  wt.min[grep("10:",wt.min)] <- 
+  wt.min[grep("10.",wt.min)] <- "9/10"
+wt.min[grep("15-",wt.min)] <- # ............. # PM = starting in the afternoon
+  wt.min[grep("15.",wt.min)] <- 
+  wt.min[grep("14.",wt.min)] <- "PM"
+
+# categorizing work end time
+wt.max[grep("19:",wt.max)] <- # ............. # 19/21 = ending between 7:00 PM and 6:59 PM
+  wt.max[grep("19.",wt.max)] <- 
+  wt.max[grep("-19",wt.max)] <- 
+  wt.max[grep("- 19",wt.max)] <- 
+  wt.max[grep("- 20",wt.max)] <- 
+  wt.max[grep("- 21",wt.max)] <- "19/21" 
+wt.max[grep("17:",wt.max)] <- # ............. # 17/18 = ending between 5:00 PM and 6:59 PM
+  wt.max[grep("17.",wt.max)] <- 
+  wt.max[grep("-17",wt.max)] <- 
+  wt.max[grep("- 17",wt.max)] <- 
+  wt.max[grep("18:",wt.max)] <- 
+  wt.max[grep("18.",wt.max)] <- 
+  wt.max[grep("-18",wt.max)] <- 
+  wt.max[grep("- 18",wt.max)] <- "17/18" 
+wt.max[grep("15.",wt.max)] <-  #............. # 15/16 = ending between 3:00 PM and 4:59 PM
+  wt.max[grep("15:",wt.max)] <- 
+  wt.max[grep("-15",wt.max)] <- 
+  wt.max[grep("16.",wt.max)] <- 
+  wt.max[grep("16:",wt.max)] <- "15/16"
+wt.max[grep("12:",wt.max)] <- # ............. # 12/14 = ending between noon and 2:59 PM
+  wt.max[grep("12.",wt.max)] <- 
+  wt.max[grep("13:",wt.max)] <- 
+  wt.max[grep("13.",wt.max)] <- 
+  wt.max[grep("_13",wt.max)] <-
+  wt.max[grep("/13",wt.max)] <- 
+  wt.max[grep("-13",wt.max)] <- 
+  wt.max[grep("14:",wt.max)] <- 
+  wt.max[grep("14.",wt.max)] <- 
+  wt.max[grep("/14",wt.max)] <- 
+  wt.max[grep("-2.",wt.max)] <- 
+  wt.max[grep("- 02",wt.max)] <- "12/14" 
+
+# joining start and end time
+wt <- paste(wt.min,wt.max,sep="_")
+wt[grep("PM_",wt)] <- "PM only" # correcting some cases and merging categories with few cases
+
+# replacing workTime variable with recoded work times
+prelqs$workTime <- as.factor(wt)
+summary(prelqs$workTime)
+```
+
+<br>
+
+## 2.2. Daily diaries
+
+Here, we merge and recode the daily `diary` datasets.
+
+### 2.2.1. Data cleaning
+
+Here, we filter trial responses, we remove unuseful columns, and we rename and sort the relevant columns of the `diary` datasets.
+``` {r}
+# filtering trial/preview responses
+diary_m <- diary_m[diary_m$DistributionChannel=="email",]
+diary_m_sat <- diary_m_sat[diary_m_sat$DistributionChannel=="email",]
+diary_a <- diary_a[diary_a$DistributionChannel=="email",]
+diary_e <- diary_e[diary_e$DistributionChannel=="email",]
+
+# removing unuseful variables
+toRemove <- c("Duration..in.seconds.","Status","IPAddress","Progress","Finished","RecordedDate","ResponseId",
+              "RecipientLastName","RecipientFirstName","LocationLatitude","LocationLongitude","DistributionChannel","UserLanguage")
+diary_m[,toRemove] <- diary_a[,toRemove] <- diary_e[,toRemove] <- diary_m_mail[,toRemove] <-
+  diary_a_mail[,toRemove] <- diary_m_sat[,toRemove] <- diary_m_sat_mail[,toRemove] <- diary_e_mail[,toRemove] <- NULL
+```
+
+
+<br>
+
+### 2.2.2. Direct e-mails
+
+Then, we merge each `diary` dataset with the corresponding data obtained by directly e-mailing participants (i.e., in case of technical/schedule problems).
+
+``` {r}
+# joining 'ordinary' datasets with datasets e-mailed datasets
+diary_a_mail$RecipientEmail <- diary_a_mail$Q22_1 # afternoon
+diary_a_mail$Q22_1 <- NULL
+diary_a <- rbind(diary_a,diary_a_mail)
+diary_e_mail$RecipientEmail <- diary_e_mail$e.mail_1 # evening
+diary_e_mail$e.mail_1 <- NULL
+diary_e <- rbind(diary_e,diary_e_mail)
+diary_m_mail$RecipientEmail <- diary_m_mail$Q30_1 # morning
+diary_m_mail$Q30_1 <- NULL
+colnames(diary_m) <- gsub("\\.","",colnames(diary_m))
+diary_m <- rbind(diary_m,diary_m_mail)
+diary_m_sat_mail$RecipientEmail <- diary_m_sat_mail$Q11_1 # Saturday morning
+diary_m_sat_mail$Q11_1 <- NULL
+diary_m_sat_mail <- diary_m_sat_mail[!is.na(diary_m_sat_mail$RecipientEmail),] # removing trial entries
+diary_m_sat <- rbind(diary_m_sat,diary_m_sat_mail)
+diary_m_sat$dayOff_today <- diary_m_sat$AWL_1 <- diary_m_sat$AWL_2 <- diary_m_sat$AWL_3 <- NA # no AWL values on Saturday
+diary_m <- rbind(diary_m,diary_m_sat)
+
+# sorting and renaming columns
+diary_m <- diary_m[,c(1:which(colnames(diary_m)=="ExternalReference"),which(colnames(diary_m)=="dayOff_today"),
+                      which(colnames(diary_m)=="BP1_1"):which(colnames(diary_m)=="dayOff_yesterday"),
+                      which(colnames(diary_m)=="AWL_1"):ncol(diary_m))]
+colnames(diary_m)[1:9] <- colnames(diary_a)[1:9] <- colnames(diary_e)[1:9] <- c("start","end","ID","recruiter.ID","dayOff_today",
+                                                                                "SBP1","DBP1","SBP2","DBP2")
+colnames(diary_a)[5] <- colnames(diary_e)[5] <- "dayOff" # differentiating afternoon/evening from morning dayOff values 
+colnames(diary_a) <- gsub("WHLSM1","WHLSM",gsub("WHLSM2","WHLSM",colnames(diary_a)))
+```
+
+<br>
+
+### 2.2.3. Merging diary data
+
+Here, we merge the four datasets into a single long-form `diary` dataset. The `diaryType` variable is created for discriminating among `M`orning, `A`fternoon, and `E`vening diaries. 
+``` {r message=FALSE, warning=FALSE}
+# adding diaryType column
+diary_m$diaryType <- "M" # Morning diary
+diary_a$diaryType <- "A" # Afternoon diary
+diary_e$diaryType <- "E" # Evening diary
+
+# Merging diary data (LONG dataset)
+diary <- plyr::join(plyr::join(diary_m,diary_a,type="full"),diary_e,type="full")
+cat("sanity check:",nrow(diary) == nrow(diary_m) + nrow(diary_a) + nrow(diary_e))
+```
+<br>
+
+### 2.2.4. Data recoding
+
+Then, we rename `diary` variables, we change the classes of the relevant variables, and we recode the levels of categorical (factor) variables consistently what we preregistered (see [preregistration here](https://osf.io/h9zvq)).
+```{r}
+# renaming columns
+colnames(diary)[which(colnames(diary)=="lateWorkHours_1")] <- "lateWorkHours" # renaming column
+colnames(diary)[which(colnames(diary)=="workHours_1")] <- "workHours" # renaming column
+colnames(diary)[which(colnames(diary)=="waketime_16")] <- "wakeTime" # renaming column
+colnames(diary) <- gsub("_","",colnames(diary))
+colnames(diary)[grepl("SQ",colnames(diary))] <- paste("SQ",1:4,sep="")
+colnames(diary)[which(colnames(diary)=="WL4")] <- "WL3"
+colnames(diary)[grepl("WHLSM",colnames(diary))] <- paste("WHLSM",1:6,sep="")
+colnames(diary)[which(colnames(diary)=="EE5")] <- "EE4"
+colnames(diary)[grepl("R.det",colnames(diary))] <- paste("R.det",1:3,sep="")
+colnames(diary)[grepl("R.rel",colnames(diary))] <- paste("R.rel",1:3,sep="")
+colnames(diary)[grepl("R.mas",colnames(diary))] <- paste("R.mas",1:3,sep="")
+
+# time (POSIXct variables)
+diary$start <- as.POSIXct(diary$start)
+diary$end <- as.POSIXct(diary$end)
+
+# numeric
+nums <- c(which(colnames(diary)=="SBP1"):which(colnames(diary)=="DBP2"),
+          which(colnames(diary)=="AWL1"):which(colnames(diary)=="AWL3"),
+          which(colnames(diary)=="OC1"):which(colnames(diary)=="SQ4"),
+          which(colnames(diary)=="WL1"):which(colnames(diary)=="R.mas3"),
+          which(colnames(diary)=="workHours"))
+diary[,nums] <- lapply(diary[,nums],as.numeric)
+
+# recording location
+diary$where <- factor(gsub("1","workplace",
+                           gsub("2","home",
+                                gsub("4","other",diary$where))),levels=c("home","workplace","other"))
+# dailyHassles
+diary$dailyHassles <- as.factor(gsub("2","No",gsub("1","Yes",diary$dailyHassles)))
+
+# diary type
+diary$diaryType <- factor(diary$diaryType,levels=c("M","A","E"))
+
+# dayOff_today & dayOff_yesterday as factor (recoding levels as FALSE = no, TRUE = yes)
+diary$dayOff <- as.logical(as.numeric(diary$dayOff)-1)
+diary$dayOfftoday <- as.logical(as.numeric(diary$dayOfftoday)-1)
+diary$dayOffyesterday <- as.logical(as.numeric(diary$dayOffyesterday)-1)
+
+# teleWork
+diary$teleWork <- factor(gsub("1","teleWork",
+                              gsub("2","office",
+                                   gsub("3","both",
+                                        gsub("4","dayOff",diary$teleWork)))),levels=c("office","teleWork","both","dayOff"))
+# confounders
+diary$confounders <- gsub("1","coffee",
+                          gsub("2","smoke",
+                               gsub("4","sport",
+                                    gsub("5","meal",
+                                         gsub("6","0",diary$confounders)))))
+```
+
+<br>
+
+### 2.2.5. Recoding confounders
+
+The `confounders` variable is processed by using the `checklist_sep` function in order to separate the different confounding factors.
+
+<details><summary>`checklist_sep()`</summary>
+<p>
+``` {r}
+checklist_sep <- function(data=NULL,varName=NULL,sep=",",nOptions=4,
+                          labels=c("coffee","smoke","sport","meal"),return.data=FALSE){
+  
+  checklist <- data.frame(checklist_var=data[,varName])
+  checklist$checklist_var <- as.character(checklist$checklist_var)
+  for(i in 1:nOptions){ checklist$new.col <- NA
+    if(!is.null(labels)){ colnames(checklist)[i+1] <- labels[i] } else { colnames(checklist)[i+1] <- paste("item",i,sep="") }}
+  
+  for(i in 1:nrow(checklist)){
+    if(!is.na(checklist[i,1])){ checklist[i,2:ncol(checklist)] <- 0
+      if(checklist[i,1]!="0"){ selected <- unlist(strsplit(checklist[i,1],sep))
+        for(k in 1:length(selected)){ checklist[i,selected[k]] <- 1 }}}}
+  checklist[,2:(nOptions+1)] <- lapply(checklist[,2:(nOptions+1)],as.factor)
+  
+  # adding new variables to data (excluding the category without confounders)
+  data <- cbind(data[,1:which(colnames(data)==varName)],checklist[,2:(ncol(checklist)-1)],
+                data[,(which(colnames(data)==varName)+1):ncol(data)])
+  
+  # recoding the original variable as logical (TRUE=any confounder category, FALSE=none)
+  data$originalVar <- data[,varName]
+  data[,varName] <- NA
+  data[!is.na(data$originalVar),varName] <- TRUE
+  data[!is.na(data$originalVar) & data$originalVar=="0",varName] <- FALSE
+  data$originalVar <- NULL
+  
+  # printing summary
+  print(summary(na.omit(checklist[,1:5])))
+  
+  # printing percentages
+  out <- paste("\n\nPercentage of",varName,"over total number of occasions with non-missing values:\n")
+  for(SC in labels){ colnames(checklist)[which(colnames(checklist)==SC)] <- "Var"
+    out <- paste(out,"- ",SC,": ",
+                 round(100*nrow(checklist[!is.na(checklist$checklist_var) & checklist$Var == "1",])
+                       /nrow(checklist[!is.na(checklist$checklist_var),]),2),
+                                  "%\n",sep="")
+    colnames(checklist)[which(colnames(checklist)=="Var")] <- SC }
+  cat(out)
+  if(return.data==TRUE){return(data)}}
+```
+</p>
+</details>
+
+``` {r}
+# number and percentages for each confounder
+diary <- checklist_sep(data=diary,varName="confounders",return.data = TRUE)
+```
+
+``` {r}
+# overall No. of cases with one or more confounders (604 TRUE, 2336 FALSE, 153 NA)
+summary(diary$confounders)
+```
+
+
+
+<br>
+
+### 2.2.6. wakeTime recoding
+
+Then, we recode the `wakeTime` variable, which was measured with an
+open-ended question.
+
+``` {r}
+# recoding wakeTime
+wakeTimes <- diary$wakeTime
+wakeTimes <- gsub("\\;",":",gsub("\\.","\\:",gsub("\\,","\\.",gsub("e",":",gsub(" ","",wakeTimes)))))
+wakeTimes[!is.na(wakeTimes) & nchar(wakeTimes)==1] <- paste("0",wakeTimes[!is.na(wakeTimes) & nchar(wakeTimes)==1],":00",sep="")
+wakeTimes[!is.na(wakeTimes) & nchar(wakeTimes)==2] <- paste(wakeTimes[!is.na(wakeTimes) & nchar(wakeTimes)==2],":00",sep="")
+wakeTimes[!is.na(diary$wakeTime) & wakeTimes=="0615"] <- "05:15"
+wakeTimes[!is.na(diary$wakeTime) & wakeTimes=="0800"] <- "08:00"
+wakeTimes[!is.na(diary$wakeTime) & wakeTimes=="0830"] <- "08:30"
+wakeTimes[!is.na(diary$wakeTime) & wakeTimes=="0700"] <- "07:00"
+wakeTimes[!is.na(wakeTimes) & nchar(wakeTimes)==4] <- paste("0",wakeTimes[!is.na(wakeTimes) & nchar(wakeTimes)==4],sep="")
+wakeTimes[!is.na(wakeTimes) & wakeTimes=="630"] <- "06:30"
+
+# wakeTime as POSIXct & hhFromAwake
+library(lubridate)
+diary$wakeTime <- as.POSIXct(paste(substr(Sys.time(),1,10),wakeTimes),format="%Y-%m-%d %H:%M",tz="GMT")
+diary$hhFromAwake <- as.numeric(difftime(as.POSIXct(paste(substr(Sys.time(),1,10),substr(diary$start,12,16)),
+                                                    format="%Y-%m-%d %H:%M",tz="GMT"),diary$wakeTime,units="hours"))
+
+# showing some example
+head(diary[!is.na(diary$wakeTime),c("wakeTime","start","hhFromAwake")])
+```
+
+<br>
+
+## 2.3. Data anonymization
+
+Third, participants' `ID` (currently their e-mail addresses) are **anonymized** (i.e., replaced with alphanumeric code from `S001` to
+`Snnn`).
+
+Before anonymizing `ID` values, we filter cases only included in one but not in the other dataset.
+``` {r}
+# preparing prelqs data
+prelqs$ID <- tolower(prelqs$ID) # all e-mails in lower capital
+prelqs.IDs <- levels(as.factor(prelqs$ID)) # saving original IDs
+
+# excluding pre-pilot diary data with the main author
+diary <- diary[!(grepl("ini.job",diary$ID)|grepl("varo@st",diary$ID)|grepl("tti@stu",diary$ID)|grepl("tti@un",diary$ID)),]
+diary$ID <- tolower(diary$ID) # all e-mails in lower capital
+
+# correcting wrongly reported e-mail addresses in diary data
+diary$ID <- gsub("tierno@studio.unibo.it","tierno@libero.it",diary$ID) 
+diary$ID <- gsub("uzziell2","uzziello",diary$ID)
+diary$ID <- gsub("uzziello@hotmail","uzziello@unibo",diary$ID)
+diary$ID <- gsub("riarosa.m","rosa.m",gsub("o@auslromagna.it","o@gmail.com",diary$ID))
+diary$ID <- gsub("o@auslcesena.it","o@gmail.com",diary$ID)
+diary$ID <- gsub("gmsil","gmail",diary$ID)
+diary$ID <- gsub("gmail.con","gmail.com",diary$ID)
+diary$ID <- gsub("lli.robo@","lli.robi@",diary$ID)
+diary$ID <- gsub("officia","officina",diary$ID)
+diary$ID <- gsub("@liberi","@libero",gsub("@lidero","@libero",gsub("@llibro","@libero",diary$ID)))
+diary$ID <- gsub("fcibien","f.cibien",gsub("klarco.com","klarco.it",diary$ID))
+IDs <- levels(as.factor(diary$ID))
+
+# sanity checks
+cat(length(IDs),"participants in diary data,",length(prelqs.IDs),"in prelqs data\n",
+    length(IDs[!(IDs%in%prelqs.IDs)]),"cases in diary but not in prelqs\n",
+    length(prelqs.IDs[!(prelqs.IDs%in%IDs)]),"cases in prelqs but not in diary")
+```
+
+``` {r}
+# removing cases only included prelqs but not in diary
+memory <- prelqs
+prelqs <- prelqs[prelqs$ID %in% IDs,]
+prelqs.IDs <- levels(as.factor(prelqs$ID))
+cat("Removed",nrow(memory)-nrow(prelqs),"participants only included in prelqs data")
+
+# removing cases only included in diary but not in prelqs
+memory <- diary
+diary <- diary[diary$ID %in% prelqs.IDs,]
+IDs <- levels(as.factor(diary$ID))
+cat("Removed",nlevels(as.factor(memory$ID))-length(IDs),"participants,",nrow(memory)-nrow(diary),
+    "observations only included in diary data")
+
+# sanity checks
+cat(length(IDs),"participants in diary data,",length(prelqs.IDs),"in prelqs data\n",
+    length(IDs[!(IDs%in%prelqs.IDs)]),"cases in diary but not in prelqs\n",
+    length(prelqs.IDs[!(prelqs.IDs%in%IDs)]),"cases in prelqs but not in diary")
+```
+
+<br>
+
+We also correct a number of issues with `diary` time points due to participants answering to the wrong link.
+
+``` {r}
+# correcting surveys taken at wrong time points
+diary[substr(diary$ID,15,27)=="rno@gmail.com" & 
+        as.character(diary$start) %in% c("2021-10-26 21:26:43","2021-11-02 21:21:51"),
+      "diaryType"] <- "E" # participant who responded twice to Afternoon diary in Evening time (keeping only BP values)
+diary[substr(diary$ID,15,27)=="rno@gmail.com" & 
+        as.character(diary$start) %in% c("2021-10-26 21:26:43","2021-11-02 21:21:51"),
+      which(colnames(diary)=="WL1"):which(colnames(diary)=="WE3")] <- NA
+diary[substr(diary$ID,8,13)=="isa.ma" & # participants that responded to a link open on the previous day
+        !is.na(diary$WHLSM3) & as.character(diary$start)=="2022-01-25 10:45:00",
+      "start"] <- as.character(as.POSIXct(diary[substr(diary$ID,8,13)=="isa.ma" & !is.na(diary$WHLSM3) & 
+                                     as.character(diary$start)=="2022-01-25 10:45:00","end"]) -
+  mean(as.numeric(difftime(diary[substr(diary$ID,8,13)=="isa.ma" & diary$start!="2022-01-25 10:45:00","end"],
+                           diary[substr(diary$ID,8,13)=="isa.ma" & diary$start!="2022-01-25 10:45:00","start"],units="secs"))))
+diary <- diary[!(substr(diary$ID,8,13)=="mo@mda" & diary$start%in%c("2022-01-25 16:39:22","2022-01-26 20:00:21")),] # double resp
+diary[grepl("aia79",diary$ID) & as.character(diary$start)=="2022-03-10 07:25:32","diaryType"] <- 
+  "M" # participant that responded to the Evening diary in Morning time (keeping only BP values and changing as Morning)
+diary[grepl("aia79",diary$ID) & as.character(diary$start)=="2022-03-10 07:25:32",
+      which(colnames(diary)=="EE1"):which(colnames(diary)=="workHours")] <- NA
+diary <- # participant that responded twice to the Morning diary 
+  diary[!(grepl("basso87",diary$ID) & as.character(diary$start)=="2022-03-07 19:53:47"),]
+
+# correcting wrongly reported BP values
+diary[substr(diary$ID,18,32)=="na.isasi.cnr.it" & as.character(diary$start)=="2021-11-25 19:17:27","SBP2"] <- 
+  133 # reported as 88133
+```
+
+<br>
+
+### 2.3.1. Preliminary questionnaire
+
+Here, we anonymize `prelqs` `ID` values.
+``` {r}
+# replacing participants' e-mail with alphanumeric code (e.g., S001)
+prelqs <- prelqs[order(prelqs$ID),] # sorting by ID
+for(ID in prelqs.IDs){ id <- paste("S",which(prelqs.IDs==ID),sep="") 
+  if(nchar(id)>2){ if(nchar(id)>3){ prelqs[prelqs$ID==ID,"ID"] <- id
+  } else { prelqs[prelqs$ID==ID,"ID"] <- gsub("S","S0",id) }
+    } else { prelqs[prelqs$ID==ID,"ID"] <- gsub("S","S00",id) }
+  prelqs[prelqs$ID==ID,"ID"] <- ifelse(nchar(id)==3,id,paste("S0",which(prelqs.IDs==ID),sep=""))}
+prelqs$ID <- as.factor(prelqs$ID)
+
+# sanity check
+head(levels(prelqs$ID))
+cat(nlevels(prelqs$ID),"participants,",nrow(prelqs),"observations") # 147, 147
+```
+
+<br>
+
+### 2.3.2. Daily diaries
+
+Here, we anonymize `diary` `ID` values.
+```{r}
+# replacing participants' e-mail with alphanumeric code (e.g., S001)
+diary <- diary[order(diary$ID,diary$start),] # sorting by ID and start time
+for(ID in IDs){ id <- paste("S",which(IDs==ID),sep="") # replacing participants' e-mail with alphanumeric code (e.g., S001)
+  if(nchar(id)>2){ if(nchar(id)>3){ diary[diary$ID==ID,"ID"] <- id
+  } else { diary[diary$ID==ID,"ID"] <- gsub("S","S0",id) }
+    } else { diary[diary$ID==ID,"ID"] <- gsub("S","S00",id) }
+  diary[diary$ID==ID,"ID"] <- ifelse(nchar(id)==3,id,paste("S0",which(IDs==ID),sep=""))}
+diary$ID <- as.factor(diary$ID)
+
+# sanity check
+head(levels(diary$ID))
+```
+
+``` {r}
+cat(nlevels(diary$ID),"participants,",nrow(diary),"observations") # 147,3077
+```
+
+<br>
+
+# 3. Data processing
+
+As a final pre-processing step, we process `diary` data by including a `day` variable, by inspecting and recoding `BP` (blood pressure) and `BMI` (body mass index) data, by switching from the current long form to a **wide form** with one row per day, by merging the `diary` and the `prelqs` datasets, and by inspecting cases of incoherent/inconsistent responses in the considered variables.
+
+## 3.1. Assessment day
+
+First, we create the variable *day* indicating the day for participation (i.e., 1 = Monday, 2 = Tuesday, 3 = Wednesday, 4 = Thursday, 5 = Friday, 7 = Monday week II, 8 = Tuesday week II, 9 = Wednesday week II, 10 = Thursday week II, 11 = Friday week II). Note that this variable is recoded to be **referred to the previous day** in cases of **Evening diaries filled after 00:00**, and in **all Morning diaries**. We also remove 5 unexpected responses on day 6 and 12 (Saturday afternoon or Sunday).
+``` {r}
+# creating day
+diary$day <- as.POSIXlt(diary$start)$wday
+
+# adding 6 days to the second week
+for(i in 2:nrow(diary)){
+  if(diary[i,"ID"]==diary[i-1,"ID"] & diary[i,"day"] < diary[i-1,"day"]){ diary[i,"day"] <- diary[i,"day"] + 6 }}
+
+# correcting evening days when start is after midnight
+for(i in 1:nrow(diary)){
+  if(diary[i,"diaryType"]=="E" & diary[i,"start"] < as.POSIXct(paste(substr(diary[i,"start"],1,10),"07:00:00"))){
+    diary[i,"day"] <- diary[i,"day"] - 1 }}
+
+# subtracting one day to all Morning diaries
+diary[diary$diaryType=="M","day"] <- diary[diary$diaryType=="M","day"] - 1
+
+# checking cases with unexpected values (6 or 12 = Morning on Mon, Evening/Afternoon on Sat)
+table(diary$day)
+```
+
+<br>
+
+``` {r}
+# inspecting cases with unexpected values (6 or 12 = Morning on Mon, Evening/Afternoon on Sat)
+cbind(wday=as.POSIXlt(diary[diary$day%in%c(6,12),"start"])$wday,
+      diary[diary$day%in%c(6,12),c("ID","day","start","SBP1","WL1","EE1","SQ1","dayOff","dayOffyesterday")])
+```
+
+<br>
+
+``` {r}
+diary <- diary[!diary$day%in%c(6,12),] # removing 5 unexpected responses 
+
+# sanity check
+diary[,c("ID","start","diaryType","day")]
+```
+
+<br>
+
+## 3.2. Blood pressure
+
+Here, we visually inspect the distributions and temporal trends of **blood pressure** `BP` values against **normative values** and
+separately by the **period of the day**. Then, we process the signal, and we compute the aggregate `BP` values.
+
+First, we prepare the data for the inspection and processing, by creading a **long form** dataset with one row for each `BP` recording.
+
+``` {r}
+# preparing dataset
+diary_long <- data.frame(ID=rep(diary$ID,4),measure=c(rep("SBP1",nrow(diary)),rep("SBP2",nrow(diary)),
+                                                      rep("DBP1",nrow(diary)),rep("DBP2",nrow(diary))),
+                         BP=c(diary$SBP1,diary$SBP2,diary$DBP1,diary$DBP2),diaryType=rep(diary$diaryType,4))
+diary_long$gender=plyr::join(diary_long,prelqs[,c("ID","gender")],type="left",by="ID")$gender
+diary_long$cv_d=paste(plyr::join(diary_long,prelqs[,c("ID","cv_dysf")],type="left",by="ID")$cv_dysf,
+                      plyr::join(diary_long,prelqs[,c("ID","bp_drugs")],type="left",by="ID")$bp_drugs,sep="_")
+```
+
+<br>
+
+### 3.2.1. BP distributions {#bp-distributions .tabset .tabset-fade .tabset-pills}
+
+Here, we visualize `BP` distributions by plotting them against **normative values**.
+
+#### vs. ESH/ESC Guidelines (2018)
+
+First, we inspect the distribution of the observed `BP` measurements, accounting for the cut-off values recommended by the [ESH/ESC Guidelines (2018)](#ref). We can see that `BP` values are quite normally distributed (although with some cases showing bimodal distribution) and centered below the cut-offs for hypertension, with a **small proportion of measurements (\~ 9-11%) above the cut-offs**. Higher `SBP` and `DBP` is showed in participants reporting suffering from cardiovascular dysfunctions and/or taking BP medications. Slightly higher systolic `BP` is reported by men compared to women, and during afternoon compared to morning and evening. Overall, the data look realistic, although **diastolic BP looks bounded at 40 mmHg**.
+
+``` {r fig.width=12,fig.height=8,warning=FALSE}
+library(ggplot2); library(gridExtra)
+
+# preparing dataset
+diary_long <- data.frame(ID=rep(diary$ID,4),measure=c(rep("SBP1",nrow(diary)),rep("SBP2",nrow(diary)),
+                                                      rep("DBP1",nrow(diary)),rep("DBP2",nrow(diary))),
+                         BP=c(diary$SBP1,diary$SBP2,diary$DBP1,diary$DBP2),diaryType=rep(diary$diaryType,4))
+diary_long$gender=plyr::join(diary_long,prelqs[,c("ID","gender")],type="left",by="ID")$gender
+diary_long$cv_d=paste(plyr::join(diary_long,prelqs[,c("ID","cv_dysf")],type="left",by="ID")$cv_dysf,
+                      plyr::join(diary_long,prelqs[,c("ID","bp_drugs")],type="left",by="ID")$bp_drugs,sep="_")
+
+grid.arrange( # plotting sistolic and diastolic BP measurements
+  ggplot(na.omit(diary_long),aes(x=measure,y=BP,group=measure)) + geom_point(color="gray",position=position_jitter()) + 
+    geom_violin(alpha=0.4) + geom_boxplot(alpha=0.4,outlier.alpha=0) + ylab("Blood pressure (mmHg)") +
+    geom_hline(yintercept = c(135,85),color="red",lty=2), # adding 2013 ESH/ESC Guidelines cut-offs for hypertension
+  ggplot(na.omit(diary_long),aes(x=measure,y=BP,fill=gender)) + geom_point(color="gray",position=position_jitter()) + # by gender
+    geom_violin(alpha=0.4) + geom_boxplot(alpha=0.4,outlier.alpha=0) + ylab("Blood pressure (mmHg)"),
+  ggplot(na.omit(diary_long),aes(x=measure,y=BP,fill=cv_d)) + geom_point(color="gray",position=position_jitter()) + 
+    geom_violin(alpha=0.4) + geom_boxplot(alpha=0.4,outlier.alpha=0) + ylab("Blood pressure (mmHg)"), # by cv_dysf & bp_drugs
+  ggplot(na.omit(diary_long),aes(x=measure,y=BP,fill=diaryType)) + geom_point(color="gray",position=position_jitter()) + 
+    geom_violin(alpha=0.4) + geom_boxplot(alpha=0.4,outlier.alpha=0) + ylab("Blood pressure (mmHg)"),nrow=2) # by time of day
+
+# No. and % of SBP > 130 mmHG
+ns <- nrow(diary_long[!is.na(diary_long$BP)&diary_long$measure%in%c("SBP1","SBP2")&diary_long$BP>135,])
+nd <- nrow(diary_long[!is.na(diary_long$BP)&diary_long$measure%in%c("DBP1","DBP2")&diary_long$BP>85,])
+cat(ns,"(",round(100*ns/nrow(diary_long[!is.na(diary_long$BP),]),1),"% ) SBP values above 130 mmHg\n",
+    nd,"(",round(100*nd/nrow(diary_long[!is.na(diary_long$BP),]),1),"% ) DBP values above 85 mmHg\n")
+
+# minumum diastolic BP
+min(diary_long[diary_long$measure%in%c("DBP1","DBP2"),"BP"],na.rm=TRUE)
+```
+
+<br>
+
+#### vs. Weisser et al (2000)
+
+Here, we compare the observed BP values with **normative values** from [Weisser et al (2000)](#ref), based on self-measured and office BP from **503 healthy Swiss adults**. Red lines indicate the 35°, 58° and 76° percentile for office (solid) and self-measured (dotted) systolic BP, and the 50°, 67° and 78° percentile for diastolic BP, respectively. White dotted lines indicate the corresponding percentiles in the current sample. We can see that the observed values are **quite similar** to the normative ones, with greater similarities with home (\~3-5 mmHg) compared to office normative values (\~9 mmHg). It is confirmed that **DBP is bounded at 40 mmHg**, with a peak of cases corresponding to the lower limit.
+
+``` {r fig.width=12,fig.height=5}
+par(mfrow=c(2,2))
+for(BP in c("SBP1","DBP1","SBP2","DBP2")){ hist(diary[,BP],main=BP,xlab="BP (mmHg)",breaks=50,col="black")
+  abline(v=quantile(diary[,BP],na.rm=TRUE,probs=c(.35,.58,.76)),col="gray",lwd=2,lty=2) # observed quantiles
+  if(substr(BP,1,1)=="S"){ abline(v=c(114.3,124.1,132.6),col="red",lwd=2,lty=2) # normative quantiles (systolic, home)
+    abline(v=c(120,130,140),col="red",lwd=3) # normative quantiles (systolic, office)
+  } else {  abline(v=c(75.1,79.9,85.8),col="red",lwd=2,lty=2) # normative quantiles (diastolic, home)
+    abline(v=c(80,85,90),col="red",lwd=3) }} # normative quantiles (diastolic, office)ì
+```
+
+#### vs. Asayama et al (2019)
+
+Then, we compare BP values obtained from Morning and Evening measures with those reported by [Asayama et al (2019)](#ref) for morning and
+evening BP self-measured by 308 **hypertensive patients**. Red lines indicate normative mean ± 2 SD, whereas gray dotted lines indicate the
+observed mean +/- 2 SD from the current sample. Again, data look 'realistic'.
+
+``` {r fig.width=12,fig.height=5}
+par(mfrow=c(2,2))
+for(BP in c("SBP1","SBP2","DBP1","DBP2")){ hist(diary[,BP],main=BP,xlab="BP (mmHg)",breaks=50,col="black")
+  abline(v=c(mean(diary[,BP],na.rm=TRUE),mean(diary[,BP],na.rm=TRUE)-2*sd(diary[,BP],na.rm=TRUE),
+             mean(diary[,BP],na.rm=TRUE)+2*sd(diary[,BP],na.rm=TRUE)),col="gray",lwd=2,lty=2)
+  if(substr(BP,1,1)=="S"){ abline(v=c(128.0,128.0+9.4*2,128.0-9.4*2),col="red",lwd=2) 
+  } else {  abline(v=c(70.5,70.5+9.7*2,70.5-9.7*2),col="red",lwd=2) }} # normative mean +/- sd (diastolic)
+```
+
+<br>
+
+### 3.2.2. BP by day time
+
+Here, we visualize the distribution of **Systolic BP values** in Morning (M), Afternoon (A) and Evening (E) recordings, while also showing individual patterns of change. It is hard to determinate the prevalence of an increasing or decreasing pattern for both variables, although most cases seem to increase from Morning to Afternoon and decrease from Afternoon to Evening.
+
+``` {r fig.width=12,fig.height=4,warning=FALSE}
+# plotting SBP
+diary$IDday <- as.factor(paste(diary$ID,diary$day,sep="_")) # adding ID x day factor
+grid.arrange(ggplot(data=diary,aes(x=diaryType,y=SBP1)) + geom_line(aes(group=IDday,col=IDday)) + geom_violin(alpha=.4) +
+               geom_boxplot(alpha=0.5,width=0.3,outlier.alpha=0) + theme(legend.position="none"),
+             ggplot(data=diary,aes(x=diaryType,y=SBP2)) + geom_line(aes(group=IDday,col=IDday)) + geom_violin(alpha=.4) +
+               geom_boxplot(fill=rgb(1,1,1,alpha=.4),width=0.3,outlier.alpha=0) + theme(legend.position="none"),nrow=1)
+
+# plotting DBP
+grid.arrange(ggplot(data=diary,aes(x=diaryType,y=DBP1)) + geom_line(aes(group=IDday,col=IDday)) + geom_violin(alpha=.4) +
+               geom_boxplot(fill=rgb(1,1,1,alpha=.4),width=0.3) + ggtitle("Diastolic BP 1") + theme(legend.position="none"),
+             ggplot(data=diary,aes(x=diaryType,y=DBP2)) + geom_line(aes(group=IDday,col=IDday)) + geom_violin(alpha=.4) +
+               geom_boxplot(fill=rgb(1,1,1,alpha=.4),width=0.3) + ggtitle("Diastolic BP 2") + theme(legend.position="none"),nrow=1)
+```
+
+<br>
+
+### 3.2.3. BP trajectories {#bp-trajectories .tabset .tabset-fade .tabset-pills}
+
+Then, we use the `plotBP` function to visualize daily fluctuations in BP values. For each recording, the first and second entered value are
+showed in light and dark blue, respectively. The red triangles show cases in which the second measurement was 10 mmHg higher or lower than
+the second one, whereas the blue dotted line indicates the [ESH/ESC Guidelines (2018)](#ref) cut-off for hypertension. For both systolic and
+diastolic BP time series, we **flag problematic cases** based on the visual inspection of steep BP increases/decreases compared to the others values from that participant.
+
+<details><summary>`plotBP()`</summary>
+<p>
+``` {r}
+plotBP <- function(data=NULL,BP="S",ncol=3,flagged=NA,what=NA,meanVal=NA){ require(ggplot2)
+  
+  # creating TIME by joining day and diaryType
+  data$TIMElab <- paste(data$day,data$diaryType,sep="")
+  data$TIME <- as.numeric(gsub("M",".0",gsub("A",".33",gsub("E",".66",data$TIMElab))))
+  
+  # setting graphic parameters
+  cols <- colnames(data)[substr(colnames(data),1,3)==paste(BP,"BP",sep="")] # columns to be plotted
+  maxScore <- max(data[,cols],na.rm=TRUE)
+  data$disc <- abs(data[,cols[1]]-data[,cols[2]])
+  data$disc10 <- FALSE
+  data[!is.na(data$disc) & data$disc>=10,"disc10"] <- TRUE
+  
+  # plotting 
+  p <- ggplot(data,aes_string(x="TIME",y=cols[1])) + 
+    geom_line(colour="lightblue") + geom_point(colour="lightblue") + 
+    scale_x_continuous(breaks=seq(1.33,12.66,length.out=11),labels=paste(1:11,"A",sep=""),position="top") +
+    geom_line(aes_string(y=cols[2]),colour="blue") + 
+    geom_point(aes_string(y=cols[2],shape="disc10"),size=2,color="blue") +
+    geom_point(data=data[!is.na(data$disc) & data$disc>=10,],aes_string(y=cols[2],shape="disc10"),size=2,color="red") +
+    facet_wrap("ID",strip.position = "right",ncol=ncol) +
+    ggtitle(paste("Daily fluctuations in",ifelse(BP=="S","Systolic","Diastolic"),
+                  "blood pressure (light blue = 1st recording, dark blue = 2nd recording, red triangles = discrep. > 10 mmHg)")) + 
+    xlab("Day of week") + ylab(paste(BP,"BP (mmHg)",sep=""))+
+    geom_hline(yintercept=ifelse(BP=="S",130,85),color="blue",lty=2)+
+    theme(axis.text.x = element_text(size=9,angle = 45),legend.position="none")
+  
+  # marking flagged cases
+  if(!is.na(flagged)){ data$flag <- data[,flagged]
+    p <- p + geom_point(data=data[!is.na(data$flag) & data$flag==TRUE,],aes_string(y=cols[2]),size=4,shape=1) +
+      geom_text(data=data[!is.na(data$flag) & data$flag==TRUE,],aes_string(y=paste(cols[2],"+10"),label=what)) }
+  
+  # showing average value
+  if(!is.na(meanVal)){ data$meanVal <- data[,meanVal]
+    p <- p + geom_line(data=data[!is.na(data$meanVal),],aes(y=meanVal),lwd=1.1,color="green") +
+      geom_point(data=data[!is.na(data$meanVal),],aes(y=meanVal),color="green") }
+  p}
+```
+</p>
+</details>
+
+<br>
+
+#### SBP
+
+``` {r fig.width=12,fig.height=80,warning=FALSE}
+plotBP(diary,BP="S",ncol=4)
+```
+
+<br>
+
+#### DBP
+
+``` {r fig.width=12,fig.height=4,warning=FALSE}
+plotBP(diary,BP="D",ncol=4)
+```
+
+<br>
+
+#### SBP (flagged)
+
+Here, we manually flag the cases showing extreme values in the **second measurement or both**, since we will remove the first measurement when it is more than 10 mmHg lower or higher than the first one (see below). Only these cases are plotted below.
+
+``` {r fig.width=12,fig.height=8,warning=FALSE}
+# flagged cases (only second = "2" or "both" measurement)
+flagS <- data.frame(ID   = c("S006","S007","S011","S011","S030","S030","S033","S058","S061","S065","S077","S077"),
+                   day   =     c(3,     2,     1,     8,    1,     2,    6,      8,     9,     10,   1,    1),
+                   diaryType= c("A",   "E",   "A",   "A",  "A",   "A",  "M",    "A",   "E",   "M",   "A",  "E"),
+                   whatS =     c("both","both","both","2",  "2",   "2",  "2",    "2",   "2",   "2",   "2",  "2"))
+# further flagged cases
+flagS <- rbind(flagS,
+               data.frame(ID   = c("s080","s080","s080","S082","S100","S110","S110","S144"),
+                   day   =     c(     1,    1,     2,     1,     1,     2,     3,      8),
+                   diaryType= c(     "E",  "M",    "E",  "A",   "A",   "M",   "M",   "A"),
+                   whatS =     c(   "both","both","both","both","both", "2",   "2",   "both")))
+
+# adding information on flagged cases
+flagS$SBPflag <- TRUE
+diary <- plyr::join(diary,flagS,by=c("ID","day","diaryType"),type="left")
+diary[is.na(diary$SBPflag) & !is.na(diary$SBP1),"SBPflag"] <- FALSE
+
+# plotting
+plotBP(diary[diary$ID%in%levels(as.factor(as.character(flagS$ID))),],BP="S",ncol=4,flagged="SBPflag",what="whatS")
+```
+
+<br>
+
+#### DBP (flagged)
+
+Here, we manually flag the cases showing extreme values in the **second measurement or both**, since we will remove the first measurement when it is more than 10 mmHg lower or higher than the first one (see below). Only these cases are plotted below.
+
+``` {r fig.width=12,fig.height=8,warning=FALSE}
+# flagged cases (only systolic = "S" or "both", but not diastolic - see below)
+flagD <- data.frame(ID  = c(rep("S006",4),           "S007","S034","S057","S058","S058","S070","S070",rep("S080",3),"S082"),
+                   day  = c(     1,  2,    2,  3,         5,     2,     9,    8,     8,       6,    8,       1,2,2,     1),
+                   diaryType=c( "A","M",  "E","M",       "E",   "M",   "E",  "A",   "E",     "M",  "M",    "E","M","E","A"),
+                   whatD =    c("2","inv","2","2",      "both", "2",  "2",   "2",   "2",     "2",  "2",  rep("both",3),"both"))
+
+# further flagged cases
+flagD <- rbind(flagD,
+               data.frame(ID=c("S092","S093","S093","S093","S117","S117","S130","S144","S144","S145"),
+                   day  =     c(  9,    2,      3,     7,    6,      9,     2,     8,     11,     1),
+                   diaryType = c("E",  "A",    "A",   "E",  "M",    "A",   "E",   "A",    "E",   "A"),
+                   whatD =    c(  "2", "inv",  "inv", "inv", "2",    "2",   "2",  "both","both", "2")))
+
+# adding information on flagged cases
+flagD$DBPflag <- TRUE
+diary <- plyr::join(diary,flagD,by=c("ID","day","diaryType"),type="left")
+diary[is.na(diary$DBPflag) & !is.na(diary$SBP1),"DBPflag"] <- FALSE
+
+# plotting
+plotBP(diary[diary$ID%in%levels(as.factor(as.character(flagD$ID))),],BP="D",ncol=4,flagged="DBPflag",what="whatD")
+```
+
+<br>
+
+### 3.2.4. BP Aggregated values
+
+Here, we aggregate the first and second measurement of systolic and diastolic `BP.` As [pre-registered here](https://osf.io/h9zvq), SBP and DBP aggregated values are computed as the **average between the first and the second** (immediately consecutive) `BP` recording. In all cases showing **discrepancies** (i.e., absolute differences) between the first and the second recording **equal to or higher than 10 mmHg, only the second recorded value** is considered (i.e., the first recording is excluded).
+
+However, we also account for the **flagged cases** marked as "2" (when the second measurement should be removed), "both" (when both measurements have extreme values in the same direction), and "inv" (when the both have extreme values in opposite directions):
+
+- in cases flagged as `"2"`, we only keep the first measurement
+
+- in cases flagged as `"inv"`, we compute the average (as in any non-flagged case)
+
+- in cases flagged as `"both"`, we interpolate the measurement as the maximum value (or the minimum, based on the direction of extreme values) recorded for that participant.
+
+This is done independently for systolic and diastolic `BP`
+
+<br>
+
+#### 3.2.4.1. Aggregating values
+
+First, we aggregate `SBP` values.
+``` {r}
+# SBP - printing info
+cat("- Averaging",nrow(diary[!is.na(diary$SBPflag) & (diary$SBPflag==FALSE | diary$SBPflag=="inv") & 
+                               abs(diary$SBP1-diary$SBP2)<10,]),"cases\n- Excluding",
+    nrow(diary[!is.na(diary$SBPflag) & abs(diary$SBP1-diary$SBP2)>=10 & diary$SBPflag==FALSE,]),
+    "first measurments\n- Excluding",nrow(diary[!is.na(diary$whatS) & diary$whatS=="2",]),
+    "second mesurements\n- Interpolating",nrow(diary[!is.na(diary$whatS) & diary$whatS=="both",]),"measurements")
+
+
+# (1) averaged cases (no flagged, or flagged = "inv", and discrepancies < 10mmHg)
+diary[(!is.na(diary$SBPflag) & diary$SBPflag==FALSE & abs(diary$SBP1-diary$SBP2) < 10) |
+        (!is.na(diary$whatS) & diary$whatS=="inv"),"SBP"] <- 
+  apply(diary[(!is.na(diary$SBPflag) & diary$SBPflag==FALSE & abs(diary$SBP1-diary$SBP2) < 10) |
+        (!is.na(diary$whatS) & diary$whatS=="inv"),c("SBP1","SBP2")],1,mean)
+# (2) cases only based on the second measuremnt (discrepancies >= 10mmHg AND no flags)
+diary[!is.na(diary$SBPflag) & diary$SBPflag==FALSE & abs(diary$SBP1-diary$SBP2) >= 10,"SBP"] <- 
+  diary[!is.na(diary$SBPflag) & diary$SBPflag==FALSE & abs(diary$SBP1-diary$SBP2) >= 10,"SBP2"]
+# (3) cases only based on the first measuremnt (flagged=TRUE and what = "2")
+diary[!is.na(diary$SBPflag) & diary$SBPflag==TRUE & diary$whatS=="2",
+      "SBP"] <- diary[!is.na(diary$SBPflag) & diary$SBPflag==TRUE & diary$whatS=="2","SBP1"]
+# (4) cases interpolated as the maximum value
+for(i in which(!is.na(diary$whatS) & diary$whatS=="both")){ 
+  if(diary[i,"SBP2"]>mean(diary[diary$ID==diary[i,"ID"],"SBP"],na.rm=TRUE)){
+    diary[i,"SBP"] <- max(diary[diary$ID==diary[i,"ID"],"SBP"],na.rm=TRUE)
+  } else { diary[i,"SBP"] <- min(diary[diary$ID==diary[i,"ID"],"SBP"],na.rm=TRUE) }}
+
+# sanity check
+nrow(diary[(!is.na(diary$SBPflag) & is.na(diary$SBP))|(is.na(diary$SBPflag) & !is.na(diary$SBP)),]) == 0 
+```
+
+<br>
+
+Then, we aggregate DBP values.
+
+``` {r}
+# DBP - printing info
+cat("- Averaging",nrow(diary[((!is.na(diary$DBPflag) & diary$DBPflag==FALSE) | 
+                               (!is.na(diary$whatD) & diary$whatD=="inv")) & 
+                               abs(diary$DBP1-diary$DBP2)<10,]),"cases\n- Excluding",
+    nrow(diary[!is.na(diary$DBPflag) & abs(diary$DBP1-diary$DBP2)>=10 & diary$DBPflag==FALSE,]),
+    "first measurments\n- Excluding",nrow(diary[!is.na(diary$whatD) & diary$whatD=="2",]),
+    "second mesurements\n- Interpolating",nrow(diary[!is.na(diary$whatD) & diary$whatD=="both",]),"measurements")
+```
+
+``` {r}
+# (1) averaged cases (no flagged and discrepancies < 10mmHg, or flagged = "inv")
+diary[((!is.na(diary$DBPflag) & diary$DBPflag==FALSE & abs(diary$DBP1-diary$DBP2) < 10) | 
+         (!is.na(diary$whatD) & diary$whatD=="inv")),"DBP"] <- 
+  apply(diary[((!is.na(diary$DBPflag) & diary$DBPflag==FALSE & abs(diary$DBP1-diary$DBP2) < 10) | 
+         (!is.na(diary$whatD) & diary$whatD=="inv")),c("DBP1","DBP2")],1,mean)
+# (2) cases only based on the second measurement (discrepancies >= 10mmHg AND no flags)
+diary[!is.na(diary$DBPflag) & diary$DBPflag==FALSE & abs(diary$DBP1-diary$DBP2) >= 10,"DBP"] <- 
+  diary[!is.na(diary$DBPflag) & diary$DBPflag==FALSE & abs(diary$DBP1-diary$DBP2) >= 10,"DBP2"]
+# (3) cases only based on the first measurement (flagged=TRUE and what = "2")
+diary[!is.na(diary$DBPflag) & !is.na(diary$whatD) & diary$DBPflag==TRUE & diary$whatD=="2",
+      "DBP"] <- diary[!is.na(diary$DBPflag) & diary$DBPflag==TRUE & diary$whatD=="2","DBP1"]
+# (4) cases interpolated as the maximum value
+for(i in which(!is.na(diary$whatD) & diary$whatD=="both")){ 
+  if(diary[i,"DBP2"]>mean(diary[diary$ID==diary[i,"ID"],"DBP"],na.rm=TRUE)){
+    diary[i,"DBP"] <- max(diary[diary$ID==diary[i,"ID"],"DBP"],na.rm=TRUE)
+  } else { diary[i,"DBP"] <- min(diary[diary$ID==diary[i,"ID"],"DBP"],na.rm=TRUE) }}
+
+# sanity check
+nrow(diary[(!is.na(diary$DBPflag) & is.na(diary$DBP))|(is.na(diary$DBPflag) & !is.na(diary$DBP)),]) == 0 
+```
+
+<br>
+
+#### 3.2.4.2. Visual inspection {#visual-inspection .tabset .tabset-fade .tabset-pills}
+
+Then, we replicate the plots generated above by showing the aggregated BP values in green.
+
+##### SBP
+
+``` {r fig.width=12,fig.height=80,warning=FALSE}
+plotBP(diary,BP="S",ncol=4,flagged="SBPflag",what="whatS",meanVal="SBP")
+```
+
+<br>
+
+##### DBP
+
+``` {r}
+plotBP(diary,BP="D",ncol=4,flagged="DBPflag",what="whatD",meanVal="DBP")
+```
+
+<br>
+
+#### 3.2.4.3. Data integration
+
+Finally, we replace the raw BP data with the processed (i.e., aggregate) values in the `diary` dataset and we remove the variables identifying flagged cases.
+
+``` {r}
+# replacing raw BP with aggregate BP
+diary <- diary[,c(1:which(colnames(diary)=="dayOfftoday"),which(colnames(diary)%in%c("SBP","DBP")),
+                  which(colnames(diary)=="dayOffyesterday"):(ncol(diary)-2))]
+
+# creating new variable summarizing flagged cases
+diary$flagBP <- FALSE
+diary[(!is.na(diary$SBPflag) & diary$SBPflag==TRUE)|(!is.na(diary$DBPflag) & diary$DBPflag==TRUE),"flagBP"] <- TRUE
+diary$SBPflag <- diary$whatS <- diary$DBPflag <- diary$whatD <- NULL # removing variables identifying flagged cases
+```
+
+<br>
+
+## 3.3. BMI
+
+Here, we inspect the distribution of `BMI` values, and we compare it with the cut-offs proposed by the [World Health Organization (2010)](#ref). We observe **no extreme BMI values** despite a few participants in the underweight (N = 3), and obesity - class II category (N = 8), and one participant in the obese - class III category. We have **no reasons to exclude** participants based on `BMI` values.
+
+``` {r fig.width=12,fig.height=4,warning=FALSE}
+hist(prelqs$BMI,xlab="BMI (kg/m^2)",breaks=30,xlim=c(15,40),ylim=c(0,14))
+abline(v=c(18.5,25,30,35,40),col="red",lty=2)
+text(x=c(16,21.5,27.5,32.5,37.5),y = 13,
+     labels=c("Underweight","Normal weight","Pre-obesity","Obesity I","Obesity II"))
+```
+
+<br>
+
+## 3.4. Daily wide dataset
+
+Here, we use the `day` variable created above to transform the `diary` dataset from the current long form (i.e., one row per measurement
+occasion within day and participant) to a daily wide form (i.e., one row per day within participant, with measurements collected on the same day being presented in the same line of the dataset).
+
+First, we split the `diary` dataset back to the three datasets based on the measurement occasion (i.e., morning, afternoon, and evening).
+``` {r}
+# sorting columns
+diary <- diary[,c("ID","day","start","end","diaryType","dayOff","dayOfftoday","dayOffyesterday",
+                  "SBP","DBP","flagBP","where","confounders","coffee","smoke","sport","meal","dailyHassles",
+                  colnames(diary)[which(colnames(diary)=="OC1"):which(colnames(diary)=="wakeTime")],"hhFromAwake",
+                  paste("AWL",1:3,sep=""),
+                  colnames(diary)[which(colnames(diary)=="WL1"):which(colnames(diary)=="workHours")],"IDday")]
+
+# splitting dataset
+diary_m <- diary[diary$diaryType=="M",c(1:which(colnames(diary)=="end"),
+                                        which(colnames(diary)=="dayOfftoday"):which(colnames(diary)=="AWL3"),ncol(diary))]
+diary_a <- diary[diary$diaryType=="A",c(1:which(colnames(diary)=="end"),which(colnames(diary)=="dayOff"),
+                                        which(colnames(diary)=="SBP"):which(colnames(diary)=="meal"),
+                                        which(colnames(diary)=="WL1"):which(colnames(diary)=="WE3"),ncol(diary))]
+diary_e <- diary[diary$diaryType=="E",c(1:which(colnames(diary)=="end"),which(colnames(diary)=="dayOff"),
+                                        which(colnames(diary)=="SBP"):which(colnames(diary)=="flagBP"),
+                                        which(colnames(diary)=="confounders"):which(colnames(diary)=="dailyHassles"),
+                                        which(colnames(diary)=="EE1"):which(colnames(diary)=="workHours"),ncol(diary))]
+
+# renaming columns sharing the same name in the three datasets
+cm <- colnames(diary_m)
+ca <- colnames(diary_a)
+ce <- colnames(diary_e)
+colnames(diary_m)[3:ncol(diary_m)][which(colnames(diary_m)[3:ncol(diary_m)]%in%ca | colnames(diary_m)[3:ncol(diary_m)]%in%ce)] <-
+  paste(colnames(diary_m)[3:ncol(diary_m)][which(colnames(diary_m)[3:ncol(diary_m)]%in%ca |
+                                                   colnames(diary_m)[3:ncol(diary_m)]%in%ce)],"mor",sep="_")
+colnames(diary_a)[3:ncol(diary_a)][which(colnames(diary_a)[3:ncol(diary_a)]%in%cm | colnames(diary_a)[3:ncol(diary_a)]%in%ce)] <-
+  paste(colnames(diary_a)[3:ncol(diary_a)][which(colnames(diary_a)[3:ncol(diary_a)]%in%cm |
+                                                   colnames(diary_a)[3:ncol(diary_a)]%in%ce)],"aft",sep="_")
+colnames(diary_e)[3:ncol(diary_e)][which(colnames(diary_e)[3:ncol(diary_e)]%in%cm | colnames(diary_e)[3:ncol(diary_e)]%in%ca)] <-
+  paste(colnames(diary_e)[3:ncol(diary_e)][which(colnames(diary_e)[3:ncol(diary_e)]%in%cm |
+                                                   colnames(diary_e)[3:ncol(diary_e)]%in%ca)],"eve",sep="_")
+
+# adding IDday column to join datasets based on ID and day
+colnames(diary_m)[ncol(diary_m)] <- colnames(diary_a)[ncol(diary_a)] <- colnames(diary_e)[ncol(diary_e)] <- "IDday"
+```
+
+<br>
+
+Second, we look for cases of **double responses** within each dataset by using the `ID` x `day` identifier created above. A total of six double responses are detected.
+``` {r}
+# diary_m: 1 double response -> taking 1st one
+diary_m[diary_m$IDday%in%diary_m$IDday[duplicated(diary_m$IDday)],] 
+diary_m <- diary_m[!(diary_m$ID=="S025" & as.character(diary_m$end_mor)=="2022-05-03 13:53:34"),]
+
+# diary_a: 2 double responses -> taking 1st or 2d based on submission time
+diary_a[diary_a$IDday%in%diary_a$IDday[duplicated(diary_a$IDday)],] 
+diary_a <- diary_a[!((diary_a$ID=="S040" & as.character(diary_a$end_aft)=="2022-03-08 20:01:01") |
+                       (diary_a$ID=="S060" & as.character(diary_a$end_aft)=="2022-01-25 18:58:10") |
+                       (diary_a$ID=="S113" & as.character(diary_a$end_aft)=="2022-02-28 20:33:41") |
+                       (diary_a$ID=="S113" & as.character(diary_a$end_aft)=="2022-03-01 21:41:58")),]
+
+# diary_e: 3 double responses -> taking 2nd or 1st based on submission time
+diary_e[diary_e$IDday%in%diary_e$IDday[duplicated(diary_e$IDday)],] 
+```
+
+<br>
+
+``` {r}
+diary_e <- diary_e[!((diary_e$ID=="S060" & as.character(diary_e$end_eve)=="2022-01-26 19:57:02") |
+                       (diary_e$ID=="S108" & diary_e$dayOff_eve==TRUE)),]
+# sanity check
+nrow(diary_m[duplicated(diary_m$IDday),]) == 0 & nrow(diary_a[duplicated(diary_a$IDday),]) == 0 &
+  nrow(diary_e[duplicated(diary_e$IDday),]) == 0
+```
+
+<br>
+
+Now we can merge the tree dataset into a **daily wide form dataset**.
+
+``` {r}
+# joining datasets
+diary_wide <- plyr::join(diary_a,plyr::join(diary_e,diary_m,by="IDday",type="full"),by="IDday",type="full")
+diary_wide <- diary_wide[order(diary_wide$ID,diary_wide$day),] # sorting by ID and day
+
+# sanity check
+nrow(diary_wide[!is.na(diary_wide$start_aft),]) == nrow(diary_a) &
+  nrow(diary_wide[!is.na(diary_wide$start_eve),]) == nrow(diary_e) & 
+  nrow(diary_wide[!is.na(diary_wide$start_mor),]) == nrow(diary_m)
+
+
+# checking for duplicates
+nrow(diary_wide[duplicated(diary_wide$IDday),])
+diary_wide$IDday <- NULL # removing IDday (no longer necessary)
+
+# adding variables to filter missing data
+diary_wide[,c("aft","eve","mor")] <- 0
+diary_wide[!is.na(diary_wide$start_aft) & !is.na(diary_wide$dayOff_aft) & diary_wide$dayOff_aft==FALSE,"aft"] <- 1
+diary_wide[!is.na(diary_wide$start_eve) & !is.na(diary_wide$dayOff_eve) & diary_wide$dayOff_eve==FALSE,"eve"] <- 1
+diary_wide[!is.na(diary_wide$start_mor) & !is.na(diary_wide$dayOffyesterday) & diary_wide$dayOffyesterday==FALSE,"mor"] <- 1 
+diary_wide[,c("aft","eve","mor")] <- lapply(diary_wide[,c("aft","eve","mor")],as.factor)
+diary_wide <- diary_wide[,c(1:2,(ncol(diary_wide)-2):ncol(diary_wide),3:(ncol(diary_wide)-3))]
+
+# sorting by ID and day
+diary_wide <- diary_wide[order(diary_wide$ID,diary_wide$day),]
+rownames(diary_wide) <- 1:nrow(diary_wide)
+
+# showing dataset
+diary_wide[,c(colnames(diary_wide)[1:6],"start_eve","start_mor")]
+```
+
+
+<br>
+
+## 3.5. Joining prelqs
+
+Here, we join the demographic and occupational information from the `prelqs` dataset with the time-varying data included in the `diary_wide` dataset. The resulting `diary_wide` dataset has multiple rows reporting the same demographic and occupational values (level-2) repeated over multiple rows associated with the same participant. Moreover, we also join the responses to the raw retrospective workaholism items.
+``` {r}
+# renaming retrospective workaholism items
+colnames(prelqs)[grep("WHLSM",colnames(prelqs))] <- paste0("duwas",1:10)
+
+# joining prelqs variables to diary_wide
+diary_wide <- plyr::join(diary_wide,
+                         prelqs[,c("ID",
+                                   colnames(prelqs)[which(colnames(prelqs)=="gender"):which(colnames(prelqs)=="children")],
+                                   "home_child","partner","home_partner",
+                                   colnames(prelqs)[which(colnames(prelqs)=="smoker"):which(colnames(prelqs)=="workTime")],
+                                   paste0("duwas",1:10))],
+                         by="ID",type="left") # merging datasets by ID
+
+# showing examples
+head(diary_wide[,c(colnames(diary_wide)[1:6],"SBP_aft","age","sector")])
+```
+
+<br>
+
+## 3.6. Response processing
+
+Here, we look for cases of **incoherent/inconsistent responses** in several considered variables.
+
+<br>
+
+### 3.6.1. Days off
+
+First, we check the cases of incoherent responses to the `dayOff` variable across the three daily diaries (e.g., participants reporting "*today, I did not work*" to the afternoon but not to the evening questionnaire). We can see a few incoherent cases (**2%**), mainly between afternoon and morning, in which participants reported a day-off at the end of the workday but an incoherent response on the following day. Since we have no criteria for establishing which was the 'true' answer, we assume that (un)voluntary mistakes were made for `dayOff=TRUE` responses, **treating them as missing responses**. Note that none of the cases with `dayOff_eve=FALSE` have `workHours=0`.
+``` {r}
+# 1) inconsistencies within Evening: dayOff_eve = FALSE but teleWork = "dayOff" (N = 4)
+diary_wide[!is.na(diary_wide$teleWork) & diary_wide$teleWork=="dayOff",c("ID","day","teleWork","workHours")]
+diary_wide[!is.na(diary_wide$teleWork) & diary_wide$teleWork=="dayOff","teleWork"] <- "office" # recoding as teleWork="office"
+
+# 2) inconsistencies between Afternoon & Evening: dayOff_aft != dayOff_eve (N = 10)
+diary_wide[!is.na(diary_wide$dayOff_aft) & !is.na(diary_wide$dayOff_eve) & diary_wide$dayOff_aft != diary_wide$dayOff_eve,
+           c("ID","day","teleWork","workHours","aft","WL1","eve","EE1","dayOff_eve","dayOff_aft")]
+diary_wide[!is.na(diary_wide$dayOff_aft) & !is.na(diary_wide$dayOff_eve) & 
+             diary_wide$dayOff_aft==TRUE & diary_wide$dayOff_eve == FALSE,"dayOff_aft"] <- NA # replacing incorrect dayOff as NA
+diary_wide[!is.na(diary_wide$dayOff_aft) & !is.na(diary_wide$dayOff_eve) & 
+             diary_wide$dayOff_aft==FALSE & diary_wide$dayOff_eve == TRUE,"dayOff_eve"] <- NA
+
+# 3) inconsistencies between Afternoon & Evening: dayOff_aft = FALSE but teleWork = "dayOff" (N = 0)
+diary_wide[!is.na(diary_wide$dayOff_aft) & !is.na(diary_wide$teleWork) & 
+             diary_wide$dayOff_aft==FALSE & diary_wide$teleWork=="dayOff",
+           c("ID","day","teleWork","workHours","aft","WL1","eve","EE1","dayOff_eve","dayOff_aft")]
+
+# 4) inconsistencies between Afternoon & Morning: dayOff_aft != dayOffyesterday (N = 4)
+diary_wide[!is.na(diary_wide$dayOff_aft) & !is.na(diary_wide$dayOffyesterday) & diary_wide$dayOff_aft!=diary_wide$dayOffyesterday,
+           c("ID","day","workHours","aft","WL1","mor","SQ1","dayOffyesterday","dayOff_aft")]
+diary_wide[!is.na(diary_wide$dayOff_aft) & !is.na(diary_wide$dayOffyesterday) & 
+             diary_wide$dayOff_aft==TRUE & diary_wide$dayOffyesterday == FALSE,"dayOff_aft"] <- NA # replacing with NA
+diary_wide[!is.na(diary_wide$dayOff_aft) & !is.na(diary_wide$dayOffyesterday) & 
+             diary_wide$dayOff_aft==FALSE & diary_wide$dayOffyesterday == TRUE,"dayOffyesterday"] <- NA
+
+# 5) inconsistencies between Evening & Morning: dayOff_eve != dayOffyesterday (N = 2)
+diary_wide[!is.na(diary_wide$dayOff_eve) & !is.na(diary_wide$dayOffyesterday) & diary_wide$dayOff_eve!=diary_wide$dayOffyesterday,
+           c("ID","day","workHours","eve","EE1","mor","SQ1","dayOffyesterday","dayOff_eve")]
+diary_wide[!is.na(diary_wide$dayOff_eve) & !is.na(diary_wide$dayOffyesterday) & diary_wide$dayOff_eve!=diary_wide$dayOffyesterday,
+           "dayOff_eve"] <- NA # replacing unexpected value with NA
+
+# 6) inconsistencies between Evening & Morning: teleWork = "dayOff" but dayOffyesterday=FALSE (N = 0)
+diary_wide[!is.na(diary_wide$dayOffyesterday) & !is.na(diary_wide$teleWork) & 
+             diary_wide$dayOffyesterday==FALSE & diary_wide$teleWork=="dayOff",
+           c("ID","day","teleWork","workHours","eve","EE1","mor","SQ1","dayOff_eve","dayOffyesterday")]
+```
+
+<br>
+
+Similarly, we inspect cases of participants reporting working days but answering "Today I did not work" to the `teleWork` item in the evening questionnaire, and vice versa. We can note that there are **no cases** of incoherent responses related to these variables.
+
+``` {r}
+# evening dayOff incoherent to evening telework (N = 0)
+diary_wide[!is.na(diary_wide$dayOff_eve) & !is.na(diary_wide$telework) &
+             ((diary_wide$dayOff_eve==FALSE & diary_wide$teleWork=="dayOff") |
+                (diary_wide$dayOff_eve==TRUE & diary_wide$teleWork!="dayOff")),
+           c("ID","dayOff_eve","teleWork","workHours")]
+
+# afternoon dayOff incoherent to evening telework (N = 0)
+diary_wide[!is.na(diary_wide$dayOff_aft) & !is.na(diary_wide$telework) &
+             ((diary_wide$dayOff_aft==FALSE & diary_wide$teleWork=="dayOff") |
+                (diary_wide$dayOff_aft==TRUE & diary_wide$teleWork!="dayOff")),
+           c("ID","dayOff_aft","teleWork","workHours")]
+
+# morning dayOffyesterday incoherent to evening telework (N = 0)
+diary_wide[!is.na(diary_wide$dayOffyesterday) & !is.na(diary_wide$telework) &
+             ((diary_wide$dayOffyesterday==FALSE & diary_wide$teleWork=="dayOff") |
+                (diary_wide$dayOffyesterday==TRUE & diary_wide$teleWork!="dayOff")),
+           c("ID","dayOffyesterday","teleWork","workHours")]
+```
+
+<br>
+
+Finally, we inspect all cases with `workHours = 0`. We can see only a few of such cases (**2%**), all of which show `dayOff_eve=FALSE` (also because it was a necessary condition for responding to the `workHours` question) as well as `dayOff_aft=FALSE` and `dayOffyesterday=FALSE`. Due to this incoherence, we 'trust' the responses to `dayOff` items and we assume that these `workHours` responses were **careless responses**. Thus, we **interpolate** them by assigning the mean No.of `workHours` reported by the same participant in the other occasions. We also note one participant (`S137`) that reported `workHours=0` in all occasions. Thus, responses are interpolated based on the `weekHours` question from the `prelqs` data of the same participant, and we flag this participant as a potential `careless` respondent.
+
+``` {r}
+# inspecting cases of workHours = 0
+cat(nrow(diary_wide[!is.na(diary_wide$workHours) & diary_wide$workHours==0,]),"cases of workHours = 0")
+
+# inspecting responses to critical variables for such cases
+diary_wide[!is.na(diary_wide$workHours) & diary_wide$workHours==0,
+           c("ID","dayOff_aft","dayOff_eve","dayOffyesterday","workHours","lateWorkHours")]
+
+# interpolating responses (i.e., assigning the mean No. of workHours for each participant)
+IDs <- levels(as.factor(as.character(diary_wide[!is.na(diary_wide$workHours) & diary_wide$workHours==0,"ID"])))
+for(ID in IDs[1:(length(IDs)-1)]){
+  diary_wide[diary_wide$ID==ID & !is.na(diary_wide$workHours) & diary_wide$workHours==0,"workHours"] <-
+    mean(diary_wide[diary_wide$ID==ID & !is.na(diary_wide$workHours) & diary_wide$workHours!=0,"workHours"])}
+
+# interpolating responses of one participant that always reported workHours=0 based on prelqs weekHours
+prelqs[prelqs$ID=="S137",c("ID","start","job","position","sector","weekHours","weekHours_remote","workTime")]
+diary_wide[diary_wide$ID=="S137" & !is.na(diary_wide$dayOff_eve) & diary_wide$dayOff_eve==FALSE,"workHours"] <-
+  prelqs[prelqs$ID=="S137","weekHours"]/5
+
+# flagging S137 as a potential careless respondent
+prelqs$careless <- FALSE
+prelqs[prelqs$ID=="S137","careless"] <- TRUE
+diary_wide <- plyr::join(diary_wide,prelqs[,c("ID","careless")],by="ID",type="left") # joining careless to diary_wide
+```
+
+<br>
+
+### 3.6.2. Start time
+
+Here, we inspect the distribution of `start` times looking for **filtering responses out of time** (e.g., morning diary filled in the evening).
+
+``` {r fig.width=12,fig.height=3}
+# plotting
+par(mfrow=c(1,3))
+hist(as.POSIXct(substr(diary_wide$start_aft,12,19),format="%H:%M:%S"),breaks="hours",main="Afternoon",xlab="")
+hist(as.POSIXct(substr(diary_wide$start_eve,12,19),format="%H:%M:%S"),breaks="hours",main="Evening",xlab="")
+hist(as.POSIXct(substr(diary_wide$start_mor,12,19),format="%H:%M:%S"),breaks="hours",main="Morning",xlab="")
+```
+
+<br>
+
+#### 3.6.2.1. Filtering Afternoon
+
+With flagged **Afternoon** responses given **after 22:00** (N = 11) :
+
+-   we **keep** all responses that were submitted **up to one hour before** starting the Evening diary (N = 3)
+
+-   we **only consider retrospective items** (i.e., `dayOff_aft`, `WL`, `WHLSM`, `WE`) and not momentary items (i.e., confounders and BP are removed) for responses submitted **less than one hour before** starting the Evening diary (N = 6)
+
+-   we **recode momentary items** (i.e., BP, confounders) as they were responded **in the Evening** for all responses submitted later than 22:00 with **no subsequent Evening response** (i.e., BP values) but with nonmissing afternoon BP (N = 2)
+
+``` {r}
+# selecting flagged cases - afternoon (N = 11)
+diary_wide$IDday <- paste(diary_wide$ID,diary_wide$day,sep="_") # re-creating IDday
+flagA <- diary_wide[!is.na(diary_wide$start_aft) & (as.POSIXct(substr(diary_wide$start_aft,12,16),format="%H:%M") < # A after 22:00
+                                                      as.POSIXct("15:00",format="%H:%M",tz="GMT") |
+                                                      as.POSIXct(substr(diary_wide$start_aft,12,16),format="%H:%M") >
+                                                      as.POSIXct("22:00",format="%H:%M",tz="GMT")),] 
+flagA[,c("IDday","start_aft","end_aft","start_eve","workHours","lateWorkHours","workTime")] # showing flagged cases
+
+# marking responses
+flagA$flag <- NA
+flagA[!is.na(flagA$start_eve) & difftime(flagA$start_eve,flagA$end_aft,units="hours")>1,"flag"] <- "ok"
+flagA[!is.na(flagA$start_eve) & difftime(flagA$start_eve,flagA$end_aft,units="hours")<=1,"flag"] <- "momentary.OUT"
+flagA[is.na(flagA$SBP_eve) & !is.na(flagA$SBP_aft),"flag"] <- "toEvening"
+table(flagA$flag) # showing No. of cases
+
+# filtering responses
+diary_wide$flagA <- NA # flagging all flagA cases in the diary_wide dataset
+diary_wide[diary_wide$IDday%in%levels(as.factor(flagA$IDday)),"flagA"] <- flagA[,"flag"]
+aft_cols <- which(colnames(diary_wide)=="SBP_aft"):which(colnames(diary_wide)=="meal_aft") # afternoon momentary columns
+eve_cols <- which(colnames(diary_wide)=="SBP_eve"):which(colnames(diary_wide)=="meal_eve") # evening momentary columns
+diary_wide[!is.na(diary_wide$flagA) & diary_wide$flagA=="momentary.OUT",aft_cols] <- NA # removing momentary (N = 6)
+diary_wide[!is.na(diary_wide$flagA) & diary_wide$flagA=="toEvening",eve_cols] <- # momentary values to Evening (N = 2)
+  diary_wide[!is.na(diary_wide$flagA) & diary_wide$flagA=="toEvening",aft_cols[aft_cols!=which(colnames(diary_wide)=="where_aft")]]
+diary_wide[!is.na(diary_wide$flagA) & diary_wide$flagA=="toEvening",
+           aft_cols[aft_cols!=which(colnames(diary_wide)=="where_aft")]] <- NA # removing mom. from those cases
+
+# sanity check
+diary_wide[!is.na(diary_wide$flagA),c("flagA","end_aft","start_eve","SBP_aft","SBP_eve","WL1","EE1")]
+```
+
+<br>
+
+#### 3.6.2.2. Filtering Evening
+
+With flagged **Evening** responses (N = 16) given after 05:00:
+
+-   we **keep** all responses that were submitted **between 21:00 and 5:00** and **up to one hour after** submitting the Afternoon diary (N = 8), by assuming that (a) in a few cases participant went to sleep around 21:30 (N = 7), and (b) responses that took 1+ hours (N = 1) were open early by mistake but responded at the right time (i.e., bedtime)
+
+-   we **remove** all **momentary responses** (i.e., BP, confounders) that were **submitted less than one hour after** submitting the Afternoon diary (N = 2)
+
+-   we **keep** all responses submitted **between 21:00 and 5:00** with **missing Afternoon** responses (N = 3)
+
+-   we **remove** all responses submitted **after 05:00** when followed by the **morning surveys** with nonmissing BP measurements (N = 2)
+
+-   we **recode momentary items** (i.e., BP, confounders) as they were responded **in the Morning**, while **removing** retrospective items for responses submitted later than 05:00 with **no subsequent Morning response** (N = 1)
+
+``` {r}
+# selecting flagged cases - evening (N = 16)
+flagE <- diary_wide[!is.na(diary_wide$start_eve) & (as.POSIXct(substr(diary_wide$start_eve,12,16),format="%H:%M") < # E after 5:00
+                                                      as.POSIXct("21:30",format="%H:%M",tz="GMT") &
+                                                      as.POSIXct(substr(diary_wide$start_eve,12,16),format="%H:%M") >
+                                                      as.POSIXct("05:00",format="%H:%M",tz="GMT")),] 
+flagE$wakeTime <- substr(flagE$wakeTime,12,16)
+flagE[,c("ID","end_aft","start_eve","end_eve","start_mor","wakeTime","workTime")] # showing flagged cases
+
+# marking responses
+flagE$flag <- NA
+flagE[!is.na(flagE$start_aft) & difftime(flagE$end_eve,flagE$end_aft,units="hours")>=1 & # >21:00 & >1h from Aft (N = 8)
+        as.POSIXct(substr(flagE$end_eve,12,16),format="%H:%M") > as.POSIXct("21:00",format="%H:%M",tz="GMT")  |
+        as.POSIXct(substr(flagE$end_eve,12,16),format="%H:%M") < as.POSIXct("05:00",format="%H:%M",tz="GMT"),"flag"] <- "ok1"
+flagE[!is.na(flagE$start_aft) & difftime(flagE$end_eve,flagE$end_aft,units="hours")<1,"flag"] <- "momentary.OUT" # >1h from Aft (2)
+flagE[is.na(flagE$start_aft) & # >21:00 & without Aft (N = 3)
+        as.POSIXct(substr(flagE$end_eve,12,16),format="%H:%M") > as.POSIXct("21:00",format="%H:%M",tz="GMT")  |
+        as.POSIXct(substr(flagE$end_eve,12,16),format="%H:%M") < as.POSIXct("05:00",format="%H:%M",tz="GMT"),"flag"] <-"ok2"
+flagE[!is.na(flagE$SBP_mor) & is.na(flagE$flag) & # >5:00 & nonmissing Morning BP (N = 2)
+        as.POSIXct(substr(flagE$end_eve,12,16),format="%H:%M") > as.POSIXct("05:00",format="%H:%M",tz="GMT") &
+        as.POSIXct(substr(flagE$end_eve,12,16),format="%H:%M") < as.POSIXct("21:00",format="%H:%M",tz="GMT"),"flag"] <-"OUT"
+flagE[is.na(flagE$SBP_mor) & # >5:00 & missing Morning BP (N = 1)
+        as.POSIXct(substr(flagE$end_eve,12,16),format="%H:%M") > as.POSIXct("05:00",format="%H:%M",tz="GMT") &
+        as.POSIXct(substr(flagE$end_eve,12,16),format="%H:%M") < as.POSIXct("21:00",format="%H:%M",tz="GMT"),"flag"] <-"toMorning"
+table(flagE$flag) # showing No. of cases
+
+# filtering responses
+diary_wide$flagE <- NA # flagging all flagM cases in the diary_wide dataset
+eve_cols.full <- which(colnames(diary_wide)=="start_eve"):which(colnames(diary_wide)=="workHours") # evening full columns
+mor_cols <- which(colnames(diary_wide)=="SBP_mor"):which(colnames(diary_wide)=="meal_mor") # morning momentary columns
+diary_wide[diary_wide$IDday%in%levels(as.factor(flagE$IDday)),"flagE"] <- flagE[,"flag"]
+diary_wide[!is.na(diary_wide$flagE) & diary_wide$flagE=="momentary.OUT",eve_cols] <- NA # removing momentary Evening (N = 2)
+diary_wide[!is.na(diary_wide$flagE) & diary_wide$flagE=="OUT",eve_cols.full] <- NA # removing all Evening (N = 2)
+diary_wide[!is.na(diary_wide$flagE) & diary_wide$flagE=="OUT","eve"] <- 0 
+diary_wide[!is.na(diary_wide$flagE) & diary_wide$flagE=="toMorning",
+           mor_cols[mor_cols!=which(colnames(diary_wide)=="where_mor")]] <- # momentary values to Morning (N = 1)
+  diary_wide[!is.na(diary_wide$flagE) & diary_wide$flagE=="toMorning",eve_cols]
+diary_wide[!is.na(diary_wide$flagE) & diary_wide$flagE=="toMorning",eve_cols] <- NA # removing mom. from those cases
+
+# sanity check
+diary_wide[!is.na(diary_wide$flagE),c("flagE","end_aft","end_eve","end_mor","SBP_eve","SBP_mor","EE1","OC1")]
+```
+
+<br>
+
+#### 3.6.2.3. Filtering Morning
+
+With flagged **Morning** responses (N = 23) given after 05:00:
+
+-   we **keep** all responses started on **Saturdays before 15:00** (N = 6)
+
+-   we **keep** all responses submitted on Tuesday-Friday **before 15:00** and **up to three hours before** submitting the Afternoon diary (N = 11)
+
+-   we **remove** all responses submitted **after 15:00** (N = 4)
+
+-   we **remove momentary items** from responses submitted **less than three hours before** submitting the Afternoon diary with nonmissing BP values (N = 1)
+
+``` {r}
+# selecting flagged cases - morning (N = 22)
+flagM <- diary_wide[!is.na(diary_wide$start_mor) & (as.POSIXct(substr(diary_wide$start_mor,12,16),format="%H:%M") < # M after 12:00
+                                                      as.POSIXct("23:59",format="%H:%M",tz="GMT") & 
+                                                      as.POSIXct(substr(diary_wide$start_mor,12,16),format="%H:%M") >
+                                                      as.POSIXct("12:00",format="%H:%M",tz="GMT")),]
+
+# adding next day start_aft (start_aft.nd) when nonmissing
+flagM$start_aft.nd <- as.POSIXct(NA)
+flagM1 <- as.data.frame(matrix(nrow=0,ncol=ncol(flagM)))
+for(i in 1:nrow(flagM)){ flagM1 <- rbind(flagM1,flagM[i,])
+  if(nrow(diary_wide[diary_wide$ID==flagM[i,"ID"] & diary_wide$day==flagM[i,"day"]+1,])>0){ 
+    flagM1[nrow(flagM1),"start_aft.nd"]<-diary_wide[diary_wide$ID==flagM[i,"ID"]&diary_wide$day==flagM[i,"day"]+1,"start_aft"]}}
+
+# showing cases
+flagM1[,c("ID","day","wakeTime","start_mor","end_mor","start_aft.nd")]
+```
+
+<br>
+
+``` {r}
+# marking responses
+flagM1$flag <- NA
+flagM1[flagM1$day%in%c(5,11) & # Saturdays with start <15:00 (N = 6)
+       as.POSIXct(substr(flagM1$start_mor,12,16),format="%H:%M") < as.POSIXct("15:00",format="%H:%M",tz="GMT"),"flag"] <- "ok1"
+flagM1[!flagM1$day%in%c(5,11) & difftime(flagM1$start_aft.nd,flagM1$end_mor,units="hours")>3 & # Tue-Fry <15:00 & >3h from Aft (11)
+       as.POSIXct(substr(flagM1$start_mor,12,16),format="%H:%M") < as.POSIXct("15:00",format="%H:%M",tz="GMT"),"flag"] <- "ok2"
+flagM1[as.POSIXct(substr(flagM1$start_mor,12,16),format="%H:%M") > # submitted >15:00 (N = 4)
+         as.POSIXct("15:00",format="%H:%M",tz="GMT"),"flag"] <- "OUT"
+flagM1[is.na(flagM1$flag),"flag"] <- "momentary.OUT" # submitted <3h before following Afternoon (N = 1)
+table(flagM1$flag) # showing No. of cases
+```
+<br>
+
+``` {r}
+# filtering responses
+diary_wide$flagM <- NA # flagging all flagM cases in the diary_wide dataset
+mor_cols.full <- which(colnames(diary_wide)=="start_mor"):which(colnames(diary_wide)=="AWL3") # morning full columns
+diary_wide[diary_wide$IDday%in%levels(as.factor(flagM1$IDday)),"flagM"] <- flagM1[,"flag"]
+diary_wide[!is.na(diary_wide$flagM) & diary_wide$flagM=="momentary.OUT",mor_cols] <- NA # removing momentary Morning (N = 1)
+diary_wide[!is.na(diary_wide$flagM) & diary_wide$flagM=="OUT",mor_cols.full] <- NA # removing all Morning (N = 4)
+diary_wide[!is.na(diary_wide$flagM) & diary_wide$flagM=="OUT","mor"] <- 0
+
+# sanity check
+diary_wide[!is.na(diary_wide$flagM),c("flagM","start_mor","end_mor","SBP_mor","OC1")]
+```
+
+<br>
+
+#### 3.6.2.4. Summary
+
+In summary, we processed `diary_wide` responses by removing those obtained out of the scheduled times and by recoding time points based on the hour of the day. Specifically, we **removed 6 cases** (2 Morning, 4 Evening) with response times extremely out of bounds, we **removed momentary item responses from 9 cases** (6 Afternoon, 2 Evening, 1 Morning) with BP measurements too close to the preceding or the following ones, and we **recoded 3 cases** (2 Afternoon, 1 Evening) by assigning momentary item responses to the following diary. Here, we re-inspect the distribution of response times in the processed data.
+
+``` {r fig.width=12,fig.height=3}
+# creating new variable summarizing flagged cases
+diary_wide$flagTime <- FALSE
+diary_wide[(!is.na(diary_wide$flagA) & diary_wide$flagA!="ok") |
+             (!is.na(diary_wide$flagE) & diary_wide$flagE!="ok1" & diary_wide$flagE!="ok2") |
+             (!is.na(diary_wide$flagM) & diary_wide$flagM!="ok1" & diary_wide$flagM!="ok2"),"flagTime"] <- TRUE
+diary_wide$flagA <- diary_wide$flagE <- diary_wide$flagM <- NULL # removing individual flag variables
+
+# plotting
+par(mfrow=c(1,3))
+hist(as.POSIXct(substr(diary_wide[!is.na(diary_wide$SBP_aft),
+                                  "start_aft"],12,19),format="%H:%M:%S"),breaks="hours",main="Aft",xlab="")
+hist(as.POSIXct(substr(diary_wide[!is.na(diary_wide$SBP_eve),
+                                  "start_eve"],12,19),format="%H:%M:%S"),breaks="hours",main="Eve",xlab="")
+hist(as.POSIXct(substr(diary_wide[!is.na(diary_wide$SBP_mor),
+                                  "start_mor"],12,19),format="%H:%M:%S"),breaks="hours",main="Mor",xlab="")
+```
+
+<br>
+
+### 3.6.3. Work hours
+
+Here, we inspect the distribution of `workHours` and `lateWorkHours` from the `diary_wide` dataset, and that of `weekHours` from the `prelqs` dataset, looking for cases of unrealistic numbers of working hours. We also compute the `workHours_total` variable as the sum of `workhours` and `lateWorkHours`.
+
+However, we can see that the latter variable would be inaccurate as it might have value > 24h in some cases, implying that a number of participants did not consider `workhours` and `lateWorkhours` as mutually exclusive. Thus, we remove it from the dataset.
+
+Moreover, whereas `workhours` seems quite realistic (ranging from 1h to 15h), **`lateWorkHours` looks inaccurately responded** by a number of participants that reported up to 10-20 hours of work after the 'ordinary' work schedule. Thus, we **dychotomize** `lateWorkHours` as `FALSE` (`lateWorkHours = 0`) or `TRUE` (`lateWorkHours > 0`)
+``` {r fig.width=12,fig.height=3}
+# computing workHours_total
+diary_wide$workHours_total <- diary_wide$workHours + diary_wide$lateWorkHours
+
+# plotting
+par(mfrow=c(1,4)); hist(diary_wide$workHours,breaks=30); hist(diary_wide$lateWorkHours,breaks=30)
+hist(diary_wide$workHours_total,breaks=30); hist(prelqs$weekHours,breaks=30)
+
+# removing workHours_total
+diary_wide$workHours_total <- NULL
+
+# cases of lateWorkHours > 10
+diary_wide[!is.na(diary_wide$lateWorkHours) & diary_wide$lateWorkHours>10,c("ID","day","workHours","lateWorkHours",
+                                                                            "SQ1","wakeTime","workTime","weekHours",
+                                                                            "weekHours_remote","job")]
+```
+
+<br>
+
+``` {r}
+# dychotomizing lateWorkHours
+diary_wide$lateWorkHours1 <- NA
+diary_wide[!is.na(diary_wide$lateWorkHours) & diary_wide$lateWorkHours==0,"lateWorkHours1"] <- FALSE
+diary_wide[!is.na(diary_wide$lateWorkHours) & diary_wide$lateWorkHours>0,"lateWorkHours1"] <- TRUE
+diary_wide$lateWorkHours <- diary_wide$lateWorkHours1
+diary_wide$lateWorkHours1 <- NULL
+summary(diary_wide$lateWorkHours) # summarizing cases  FALSE=702, TRUE=245, NA=197
+```
+
+<br>
+
+### 3.6.4. BP confounders
+
+Finally, we observe a number of cases (N = 2-7) with nonmissing response to the core `diary` items (e.g., workaholism, exhaustion, and sleep items) but missing response to the blood pressure confounders. Here, we set the confounders = `FALSE` for all of these cases.
+``` {r}
+# afternoon
+cat(nrow(diary_wide[!is.na(diary_wide$WHLSM1) & is.na(diary_wide$confounders_aft),]),
+    "cases with missing confounders_aft but nonmissing WHLSM1 item score")
+diary_wide[!is.na(diary_wide$WHLSM1) & is.na(diary_wide$confounders_aft),"confounders_aft"] <- FALSE
+
+# evening
+cat(nrow(diary_wide[!is.na(diary_wide$EE1) & is.na(diary_wide$confounders_eve),]),
+    "cases with missing confounders_eve but nonmissing EVE1 item score")
+diary_wide[!is.na(diary_wide$EE1) & is.na(diary_wide$confounders_eve),"confounders_eve"] <- FALSE
+
+# same thing for flagBP variables
+diary_wide[!is.na(diary_wide$WHLSM_1) & is.na(diary$flagBP_aft),"flagBP_aft"] <- FALSE
+diary_wide[!is.na(diary_wide$EE_1) & is.na(diary$flagBP_eve),"flagBP_eve"] <- FALSE
+```
+
+<br>
+
+# 4. Data selection
+
+Here, we select the observations, participants, and variables to be considered for the subsequent analyses. That is, we discard pilot participants and all related observations, and we remove the variables not considered in the present work.
+
+## 4.1. Variable selection
+
+Here, we subset the data by selecting and sorting the variables to be considered in the following analyses, whereas unused variables are not included.
+``` {r}
+# diary data                # case identification
+diary_wide <- diary_wide[,c("ID","day",
+
+                            # compliance
+                            "aft","eve","mor",
+
+                            # data quality
+                            "flagTime","flagBP_aft","flagBP_eve","careless",
+
+                            # afternoon diary
+                            "start_aft","end_aft", # starting & ending date & time
+                            "dayOff_aft", # took a day off (missing responses)
+                            "SBP_aft","DBP_aft", # blood pressure
+                            "where_aft","confounders_aft","coffee_aft","smoke_aft","sport_aft","meal_aft", # confounders
+                            paste("WHLSM",1:6,sep=""), # state workaholism
+
+                            # evening diary
+                            "start_eve","end_eve", # starting & ending date & time
+                            "dayOff_eve", # took a day off (missing responses)
+                            "SBP_eve","DBP_eve", # blood pressure
+                            "confounders_eve","coffee_eve","smoke_eve","sport_eve","meal_eve", # confounders
+                            "teleWork","workHours","dailyHassles_eve", # further confounders/covariates
+                            paste("EE",1:4,sep=""), # emotional exhaustion
+                            paste0("R.det",1:3), # psychological detachment
+
+                            # morning diary
+                            "start_mor","end_mor", # starting & ending date & time
+                            "dayOffyesterday", # took a day off yesterday or today (missing responses)
+                            "lateWorkHours","wakeTime","hhFromAwake", # confounders/covariates
+                            paste("SQ",1:4,sep=""), # sleep quality
+
+                            # demographics from the preqls dataset
+                            colnames(diary_wide)[which(colnames(diary_wide)=="gender"):which(colnames(diary_wide)=="weekHours")],
+                            
+                            # Retrospective workaholism items from the prelqs dataset
+                            paste0("duwas",1:10))]
+```
+
+<br>
+
+## 4.2. Case selection
+
+Here, we subset the data by selecting the cases to be considered in the following analyses. That is, we **filter 12 pilot participants** that took part in the pilot trial of the study (i.e., before 2021-04-05).
+``` {r}
+# selecting pilot participants (12)
+(pilots <- levels(as.factor(as.character(prelqs[prelqs$start<as.POSIXct("2021-04-05"),"ID"]))))
+
+# filtering 12 pilot participants from diary data
+memory <- diary
+memory2 <- diary_wide
+diary <- diary[!(diary$ID%in%pilots),]
+diary_wide <- diary_wide[!(diary_wide$ID%in%pilots),]
+diary$ID <- as.factor(as.character(diary$ID))
+diary_wide$ID <- as.factor(as.character(diary_wide$ID))
+cat("Removed",nlevels(memory$ID)-nlevels(diary$ID),"participants,",
+    nrow(memory2)-nrow(diary_wide),"days,",nrow(memory)-nrow(diary),"observations")
+cat("diary_wide: total No. of responses =",nrow(diary_wide),"from",nlevels(diary_wide$ID),"participants")
+```
+
+<br>
+
+# 5. Data dictionary
+
+Here, we provide a definition for each variable in the processed `diary_wide` datasets.
+
+``` {r}
+str(diary_wide)
+```
+
+<br>
+
+**Identification**
+
+-   `ID` = participant's identification code
+
+-   `day` = day of participation (from 1 to 11)
+
+<br>
+
+**Compliance**
+
+-   `aft` = day including the response to the Afternoon
+    questionnaire (1) or not (0)
+
+-   `eve` = day including the response to the Evening questionnaire (1)
+    or not (0)
+
+-   `mor` = day including the response to the Morning questionnaire (1)
+    or not (0)
+
+<br>
+
+**Data quality**
+
+-   `flagTime` = responses recoded due to wrong response timing (i.e.,
+    responses given outside the scheduled intervals) (see section 3.6.2)
+
+-   `flagBP_aft` - `flagBP_eve` = flagged cases that were reprocessed
+    due to extreme BP values (see section 3.2)
+
+-   `careless` = participant flagged as a careless respondent
+    (`careless = TRUE`) due to inconsistent responses in the `DayOff`
+    variables (see section 3.4.1) - the same variable is included in the
+    `prelqs` dataset
+
+<br>
+
+**Afternoon questionnaire**
+
+-   `start_aft` = starting time of the Afternoon questionnaire
+    (yyyy-mm-dd hh:mm:ss)
+
+-   `end_aft` = submission time of the Afternoon questionnaire
+    (yyyy-mm-dd hh:mm:ss)
+
+-   `dayOff_aft` = logical variable indicating whether the participant
+    reported working on that day (FALSE) or not (TRUE)
+
+-   `SBP_aft` - `DBP_aft` = systolic and diastolic aggregate blood
+    pressure value (mmHg) measured in the Afternoon
+
+-   `where_aft` = place where the Afternoon blood pressure recording was
+    done ("home", "workplace", "other")
+
+-   `confounders_aft` = logical variable indicating the presence (TRUE)
+    or absence (FALSE) of any confounder before the Afternoon recording
+
+-   `coffee_aft` - `meal_aft` = variables indicating the presence (1) or
+    absence (0) of each confounder (i.e., cofee, smoke, sport, and meal)
+
+-   `WHLSM1` - `WHLSM_6` = item scores at the diary version of the DUWAS
+    (workaholism) (1-7)
+
+<br>
+
+**Evening questionnaire**
+
+-   `start_eve` = starting time of the Evening questionnaire (yyyy-mm-dd
+    hh:mm:ss)
+
+-   `end_eve` = submission time of the Evening questionnaire (yyyy-mm-dd
+    hh:mm:ss)
+
+-   `dayOff_eve` = logical variable indicating whether the participant
+    reported working on that day (FALSE) or not (TRUE)
+
+-   `SBP_eve` - `DBP_eve` = systolic and diastolic aggregate blood
+    pressure value (mmHg) measured in the Evening
+
+-   `confounders_eve` = logical variable indicating the presence (TRUE)
+    or absence (FALSE) of any confounder before the Evening recording
+
+-   `coffee_eve` - `meal_eve` = variables indicating the presence (1) or
+    absence (0) of each confounder (i.e., cofee, smoke, sport, and meal)
+
+-   `teleWork` = factor indicating whether on that day the participant
+    worked in the "office", did "teleWork", or "both"
+
+-   `workHours` = number of working hours for that day (No.)
+
+-   `dailyHassless_eve` = factor indicating whether the participant
+    reported some daily hassles outside the working time on that day
+    ("Yes") or not ("No")
+
+-   `EE1` - `EE4` = item scores at the diary version of the Copenhagen
+    Burnout Inventory (emotional exhaustion) (1-7)
+
+-   `R.det1` - `R.det3` = item scores at the diary version of the Recovery Experiences Questionnaire (psychological detachment) (1-7)
+
+<br>
+
+**Morning questionnaire**
+
+-   `start_mor` = starting time of the Morning questionnaire (yyyy-mm-dd
+    hh:mm:ss)
+
+-   `end_mor` = submission time of the Morning questionnaire (yyyy-mm-dd
+    hh:mm:ss)
+
+-   `dayOffyesterday` = logical variable indicating whether the
+    participant reported working on the previous day day (FALSE) or not
+    (TRUE)
+
+-   `lateWorkHours` = logical variable indicating whether the
+    participant reported working in the previous evening (TRUE) or not
+    (FALSE)
+
+-   `wakeTime` = self-reported waking time (yyyy-mm-dd hh:mm:ss)
+
+-   `hhFromAwake` = number of hours between waketime and the response to
+    the Morning questionnaire
+
+-   `SQ` - `SQ4` = item scores at the diary version of the
+    Mini Sleep Questionnaire (sleep disturbances) (1-7)
+
+<br>
+
+**Retrospective time-invariant variables** (measured with the preliminary questionnaire)
+
+*Demographics*
+
+-   `gender` = participant’s gender (“F” or “M”)
+
+-   `age` = participant’s age (years)
+
+-   `BMI` = participant’s body mass index (kg/m^2)
+
+-   `edu` = participant’s education level (“middle”, “highschool”, “university+”)
+
+-   `mStatus` = participant’s marital status (“single”, “partner”, “divorced”, “widowed”)
+
+-   `home` = family situation (living “alone” or with “partner”, “children”, “parents”, “others”)
+
+-   `children` = number of children (No.)
+
+-   `home_child` = living with children (Yes/No)
+
+-   `partner` = having a partner (Yes/No)
+
+-   `home_partner` = living with partner (Yes/No)
+
+*Confounders and inclusion criteria*
+
+-   `smoker` = smoking status (“No”, “Yes”, “Quit_less”, “Quit_more”)
+
+-   `bp_drugs` = participant reporting taking blood pressure medications (e.g., diuretics, beta-blokkants, anti-hypertension)
+
+-   `horm_drugs` = participant reporting taking hormonal medications (e.g., birth control)
+
+-   `psy_drugs` = participant reporting taking psychiatric drugs (e.g., antidepressants, anxiety)
+
+-   `cv_dysf` = participant reporting suffering from a cardiovascular disease (e.g., hypertension, ischemia, strokes)
+
+-   `sleep_dysf` = participant reporting suffering from a sleep-related disease (e.g., insomnia, parasomnia, sleep apnea)
+
+*Occupational variables*
+
+-   `job` = participant’s job recoded using the ISCO-08 classification of occupations (level 2) (Ganzeboom, 2010
+
+-   `position` = participant’s job position (“Employee”, “Project”, “Manager”, “(Self-)Employer”)
+
+-   `sector` = participant’s job sector (“Private” or “Public”)
+
+-   `weekHours` = participant’s self-reported mean number of working hours per week (No.)
+
+<br>
+
+# 6. Data export
+
+Here, we export the recoded and pre-processed `diary_wide` dataset (renamed as `diary`) to be used for further analyses. The datasets is exported in both CSV and RData format.
+``` {r}
+# exporting diary data
+diary <- diary_wide # renamed as 'diary'
+save(diary,file="DATI/diary_processed.RData") # RData
+write.csv2(diary,file="DATI/diary_processed.csv", row.names=FALSE) # csv with ";"
+```
+
+<br>
+
+# References {#ref}
+
+- Ganzeboom, H. B. (2010). International standard classification of occupations ISCO-08 with ISEI-08 scores. Version of July, 27, 2010. Available from [this link](http://www.harryganzeboom.nl/Pdf/2010%20-%20Ganzeboom%20-%20A%20New%20International%20Socio-Economic%20Index%20ISEI%20of%20occupational%20status%20for%20the%20International%20Standard%20Classification%20of%20Occupation.pdf).
+
+## R packages

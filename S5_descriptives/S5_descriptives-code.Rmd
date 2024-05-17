@@ -1,0 +1,2331 @@
+---
+title: "The daily costs of workaholism"
+subtitle: "Supplementary material S5: Descriptive statistics and covariate selection"
+author:  "Luca Menghini, Ph.D., Cristian Balducci, Ph.D."
+date: "`r Sys.Date()`"
+bibliography: [packagesDesc.bib]
+nocite: '@*'
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    css: styles.css
+    code_download: true
+  pdf_document: default
+  word_document: default
+  theme: united
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+<br>
+
+# Aims and content
+
+The present document includes the analytical steps implemented to compute the descriptive statistics from the retrospective and daily diary data collected with the Qualtrics platform (Qualtrics, Seattle, WA, USA) from an heterogeneous samples of workers over two weeks, pre-processed as shown in [Supplementary Material S3](https://Luca-Menghini.github.io/the-daily-costs-of-workaholism/S3_preProcessing/S3_data-processing-code-and-output.html) and aggregated as shown in [Supplementary Material S4](https://Luca-Menghini.github.io/the-daily-costs-of-workaholism/S4_psychometrics/S4_psychometrics-code-and-output.html). The document also depicts the procedure used to **select the covariates** to be included in the following multilevel models (see [Supplementary Material S6](https://Luca-Menghini.github.io/the-daily-costs-of-workaholism/S6_modeling/S6_modeling-code-and-output.html)).
+
+Here, we remove all objects from the R global environment.
+```{r  }
+# removing all objets from the workspace
+rm(list=ls())
+```
+
+The following R packages are used in this document (see [References](#ref) section):
+```{r  }
+# required packages
+packages <- c("knitr","Rmisc","Hmisc","lme4","ggplot2","reshape2","MuMIn")
+
+# generate packages references
+knitr::write_bib(c(.packages(), packages),"packagesDesc.bib")
+
+# # run to install missing packages
+# xfun::pkg_attach2(packages, message = FALSE); rm(list=ls())
+```
+
+<br>
+
+# 1. Data reading
+
+First, we read daily diary dataset `diary` and we rebuild the preliminary questionnaire `prelqs` exported from the previous step ([Supplementary Material S4](https://Luca-Menghini.github.io/the-daily-costs-of-workaholism/S4_psychometrics/S4_psychometrics-code-and-output.html)).
+```{r  }
+# loading data
+load("DATI/diary_aggregated.RData") 
+
+# rebuilding the prelqs dataset (only including variables from the preliminary questionnaire)
+prelqs <- diary[!duplicated(diary$ID),c(1,which(colnames(diary)=="gender"):ncol(diary))]
+
+# original sample sizes
+cat("diary:",nrow(diary),"responses (days) from",nlevels(diary$ID),"participants")
+cat("prelqs:",nrow(prelqs),"responses from",nlevels(prelqs$ID),"participants")
+```
+
+<br>
+
+# 2. Data filtering
+
+As we [pre-registered here](https://osf.io/h9zvq), we filter the data based on participant compliance with the protocol, that is we **exclude the participants with less than 3 full days of participation** (i.e., with nonmissing response to the afternoon, evening, and morning questionnaire).
+```{r  }
+# filtering participants with less than 3 observations
+clean <- diary[0,]
+for(ID in levels(diary$ID)){ 
+  if(nrow(diary[diary$ID==ID & diary$aft==1 & diary$eve==1 & diary$mor==1,]) >= 3){ 
+    clean <- rbind(clean,diary[diary$ID==ID,]) }}
+clean$ID <- as.factor(as.character(clean$ID)) # resetting ID levels
+clean_prelqs <- prelqs[prelqs$ID %in% levels(clean$ID),] # filtering prelqs data
+clean_prelqs$ID <- as.factor(as.character(clean_prelqs$ID)) # resetting ID levels
+cat("diary: Excluded",nlevels(diary$ID)-nlevels(clean$ID),"participants and",nrow(diary)-nrow(clean),"observations")
+
+# updating sample sizes
+cat("diary:",nrow(clean),"responses from",nlevels(clean$ID),"participants")
+prelqs <- prelqs[prelqs$ID %in% levels(clean$ID),] # filtering prelqs data
+prelqs$ID <- as.factor(as.character(prelqs$ID)) # resetting ID levels
+cat("prelqs:",nrow(prelqs),"responses from",nlevels(prelqs$ID),"participants")
+```
+
+<br>
+
+# 3. Descriptives
+
+First, we describe the sample and compute the descriptive statistics and correlations of the core study variables (i.e., workaholism, `WHLSM`; afternoon, evening, and morning blood pressure, `SBP_aft`, `DBP_aft`, `SBP_eve` `DBP_eve`; emotional exhaustion, `EE`; sleep disturbances, `SD`, and recovery experiences, `RDet` and `RRel`) and a set of potential quantitative covariates (i.e., workhours, `workHours`; time since waking-up, `hhFromAwake`; age, `age`; BMI, `BMI`, and weekly working hours, `weekHours`).
+
+The following packages and functions are used to optimize the analysis.
+```{r warning=FALSE,message=FALSE}
+library(knitr); library(ggplot2); library(reshape2)
+```
+
+<details><summary>`multidesc()`</summary>
+<p>
+```{r }
+#' @title Descriptive statistics (mean and SD) and intraclass correlation of multilevel datasets
+#' @param long = long-form data.frame including all time-varying variables with one row per observation
+#' @param wide = wide-form data.frame including all time-invariant variables with one row per subject
+#' @param cluster = character string indicating the name of the column with the subject identifiers
+#' @param lv1 = character vector indicating the column names of the time-varying variables in the long dataset
+#' @param lv2 = character vector indicating the column names of the time-invariant variables in the wide dataset
+#' @param group = character string indicating the name of the column of the grouping variable (defult: NA for no group specification)
+#' @param group.labels = character vector indicating the name of the group variable levels (default: NA)
+multidesc <- function(long,wide,cluster="ID",lv1,lv2){ require(Rmisc); require(lme4)
+  
+  # lv1 data
+  out <- data.frame(Measure=lv1[1],
+                    N=summarySE(long,lv1[1],na.rm=TRUE)[,2],
+                    Mean=paste(round(summarySE(long,lv1[1],na.rm=TRUE)[,3],2)," (",
+                               round(summarySE(long,lv1[1],na.rm=TRUE)[,4],2),")",sep=""))
+  for(i in 2:length(lv1)){
+    out <- rbind(out,
+                 data.frame(Measure=lv1[i],
+                            N=summarySE(long,lv1[i],na.rm=TRUE)[,2],
+                            Mean=paste(round(summarySE(long,lv1[i],na.rm=TRUE)[,3],2)," (",
+                                       round(summarySE(long,lv1[i],na.rm=TRUE)[,4],2),")",sep="")))}
+  
+  # lv2 data
+  if(!is.na(lv2[1])){
+    for(i in 1:length(lv2)){
+      out <- rbind(out,
+                   data.frame(Measure=lv2[i],
+                              N=summarySE(wide,lv2[i],na.rm=TRUE)[,2],
+                              Mean=paste(round(summarySE(wide,lv2[i],na.rm=TRUE)[,3],2)," (",
+                                         round(summarySE(wide,lv2[i],na.rm=TRUE)[,4],2),")",sep="")))}}
+  
+  # ICC
+  out$ICC <- NA
+  for(i in 1:length(lv1)){
+    m <- lmer(formula=gsub("var",lv1[i],gsub("ID",cluster,"var~(1|ID)")),data=long) # VAR_between / (VAR_between + VAR_within)
+    out[out$Measure==lv1[i],"ICC"] <- round(as.data.frame(VarCorr(m))[1,4]/
+                                              (as.data.frame(VarCorr(m))[1,4]+as.data.frame(VarCorr(m))[2,4]),2)}
+  rownames(out) <- gsub(".cm","",rownames(out))
+  return(out)}
+```
+</p>
+</details>
+
+Computes and prints descriptive statistics (mean and SD) and intraclass correlation of a multilevel dataset.
+
+<details><summary>`multicorr()`</summary>
+<p>
+```{r }
+#' @title Correlation matrix of multilevel datasets
+#' @param long = long-form data.frame including all time-varying variables with one row per observation
+#' @param wide = wide-form data.frame including all time-invariant variables with one row per subject
+#' @param cluster = character string indicating the name of the column with the subject identifiers
+#' @param lv1 = character vector indicating the column names of the time-varying variables in the long dataset
+#' @param lv2 = character vector indicating the column names of the time-invariant variables in the wide dataset
+#' @param pvalue = logical value specifying whether p-values should be reported or not (default: FALSE)
+#' @param correction = character specifying the type of correction to be applied to the computed p-values (see ?p.adjust), default is "bonferroni"
+multicorr <- function(long,wide,lv1,lv2,cluster="ID",pvalue=FALSE,correction="bonferroni"){ 
+  require(Rmisc); require(Hmisc); require(plyr)
+  
+  # renaming cluster as "ID"
+  colnames(long)[which(colnames(long)==cluster)] <- "ID"
+  
+  # person-mean-centering lv-1 variables
+  for(Var in lv1){
+    wide <- cbind(wide,aggregate(long[,Var],list(long$ID),mean,na.rm=TRUE)[,2]) # computing individual means
+    colnames(wide)[ncol(wide)] <- paste0(Var,".cm")
+    long <- join(long,wide[,c("ID",paste0(Var,".cm"))],by="ID",type="left") # joining with long-form data
+    long[,paste(Var,".mc")] <- long[,Var] - long[,paste0(Var,".cm")] # computing mean-centered scores
+    colnames(long)[ncol(long)] <- paste0(Var,".mc") }
+  
+  # between-subjects correlations (lv2)
+  if(!is.na(lv2[1])){
+    out <- rcorr(as.matrix(wide[,c(paste0(lv1,".cm"),lv2)]), type = "pearson")
+  } else { out <- rcorr(as.matrix(wide[,paste0(lv1,".cm")]), type = "pearson") }
+  rb <- round(out$r,2) # corr coefficients
+  rb[lower.tri(rb)] <- NA
+  rownames(rb) <- gsub(".cm","",rownames(rb))
+  colnames(rb) <- gsub(".cm","",colnames(rb))
+  rb.p <- out$P # pvalues
+  rb.p[lower.tri(rb.p)] <- NA
+  
+  # within-participant correlations (lv1)
+  out <- rcorr(as.matrix(long[,paste(lv1,".mc",sep="")]), type = "pearson")
+  rw <- round(out$r,2) # corr coeff.
+  rw[upper.tri(rw)] <- NA
+  rownames(rw) <- gsub(".mc","",rownames(rw))
+  colnames(rw) <- gsub(".mc","",colnames(rw))
+  rw.p <- out$P # pvalues
+  rw.p[upper.tri(rw.p)] <- NA
+  
+  # adjusting p-values
+  if(pvalue==TRUE){
+    adj <- data.frame(original=c(rb.p[!is.na(rb.p)],rw.p[!is.na(rw.p)]),
+                      sig=rep(NA,length(c(rb.p[!is.na(rb.p)],rw.p[!is.na(rw.p)]))))
+    adj$level <- "w"
+    adj[1:length(rb.p[!is.na(rb.p)]),"level"] <- "b"
+    adj$adjusted=p.adjust(adj$original,method=correction)
+    # significance level
+    adj[adj$adjusted<.05,"sig"] <- "*"
+    adj[adj$adjusted<.01,"sig"] <- "**"
+    adj[adj$adjusted<.001,"sig"] <- "***"
+    adj[is.na(adj$sig),"sig"] <- ""
+    adjb <- adj[adj$level=="b",]
+    adjw <- adj[adj$level=="w",]
+    for(i in 1:nrow(adjb)){ rb.p[!is.na(rb.p) & rb.p==adjb[i,"original"]] <- adjb[i,"sig"] }
+    for(i in 1:nrow(adjw)){ rw.p[!is.na(rw.p) & rw.p==adjw[i,"original"]] <- adjw[i,"sig"] }
+    for(i in 1:nrow(rb.p)){ for(j in 1:ncol(rb.p)){ 
+      if(!is.na(rb.p[i,j])){ rb[i,j] <- paste(round(as.numeric(rb[i,j]),2),rb.p[i,j],sep="")}}}
+    for(i in 1:nrow(rw.p)){ for(j in 1:ncol(rw.p)){ 
+      if(!is.na(rw.p[i,j])){ rw[i,j] <- paste(round(as.numeric(rw[i,j]),2),rw.p[i,j],sep="")}}}}
+  
+  # filling rb empty cells
+  rb[1:length(lv1),1:length(lv1)][lower.tri(rb[1:length(lv1),1:length(lv1)])] <- rw[lower.tri(rw)]
+  rb <- t(rb) # transposing the matrix (correlations within-individual are shown above the main diagonal)
+  return(rb)}
+```
+</p>
+</details>
+
+computes the correlation matrix of a multilevel dataset.
+
+<br>
+
+## 3.1. Sample description
+
+Here, we describe the sample by providing frequencies and other descriptive statistics of sociodemographic and work-related variables collected with the preliminary questionnaire, considering the included subsample.
+```{r }
+# gender (freq; %)
+summary(prelqs$gender); round(100*summary(prelqs$gender)/nrow(prelqs),1)
+
+# age (mean, SD)
+round(mean(prelqs$age),2); round(sd(prelqs$age),2)
+
+# BMI (mean, SD)
+round(mean(prelqs$BMI),2); round(sd(prelqs$BMI),2)
+
+# education (freq; %)
+summary(prelqs$edu); round(100*summary(prelqs$edu)/nrow(prelqs),1)
+
+# job sector (freq; %)
+summary(prelqs$sector); round(100*summary(prelqs$sector)/nrow(prelqs),1)
+
+# job position (freq; %)
+summary(prelqs$position); round(100*summary(prelqs$position)/nrow(prelqs),1)
+
+# occupational groups (%)
+jobs <- round(100*summary(prelqs$job)/nrow(prelqs),1)
+jobs[order(jobs,decreasing=TRUE)]
+
+# weekly working time (mean; SD)
+round(mean(prelqs$weekHours),2); round(sd(prelqs$weekHours),2)
+
+# having a partner (freq; %)
+summary(prelqs$partner); round(100*summary(prelqs$partner)/nrow(prelqs),1)
+
+# having a children (freq; %)
+summary(prelqs$children); round(100*summary(prelqs$children)/nrow(prelqs),1)
+
+# living arrangements (freq; %)
+summary(prelqs$home); round(100*summary(prelqs$home)/nrow(prelqs),1)
+
+# smoking status (freq; %)
+summary(prelqs$smoker); round(100*summary(prelqs$smoker)/nrow(prelqs),1)
+```
+
+<br>
+
+## 3.2. Response rate
+
+Here, we report the total number of observations and response rate for each variable, considering the included subsample.
+```{r  }
+# total number of diary entries, days, and participants
+cat(nrow(clean[clean$aft==1,])+nrow(clean[clean$eve==1,])+nrow(clean[clean$mor==1,]),"diary entry,",
+    nrow(clean),"daily observations from",nlevels(clean$ID),"participants")
+
+# computing Nweeks, Nobs, and complDays variables
+prelqs$Nweeks <- prelqs$complObs <- prelqs$complDays <- 1
+for(i in 1:nrow(prelqs)){
+  if(max(clean[clean$ID==prelqs[i,"ID"],"day"])>6){ prelqs[i,"Nweeks"] <- 2 } # No. of weeks
+  prelqs[i,"complObs"] <- nrow(clean[clean$ID==prelqs[i,"ID"] & clean$aft==1,]) + # No. of complete observations
+    nrow(clean[clean$ID==prelqs[i,"ID"] & clean$eve==1,]) + nrow(clean[clean$ID==prelqs[i,"ID"] & clean$mor==1,])
+  prelqs[i,"complDays"] <- nrow(clean[clean$ID==prelqs[i,"ID"] & clean$aft==1 & clean$eve==1 & clean$aft==1,]) } # No. full days
+cat("Sanity check:",min(prelqs$complDays)==3 & max(prelqs$Nweeks)==2) # min 3 complete days and max 2 weeks
+
+# number and % of participants involved for 1 vs. 2 weeks
+summary(as.factor(prelqs$Nweeks))
+round(100*summary(as.factor(prelqs$Nweeks))/nrow(prelqs),1)
+
+# computing respRate
+prelqs[prelqs$Nweeks==1,"respRate"] <- round(100*prelqs[prelqs$Nweeks==1,"complObs"]/15,2) # max 15 obs when Nweeks = 1
+prelqs[prelqs$Nweeks==2,"respRate"] <- round(100*prelqs[prelqs$Nweeks==2,"complObs"]/30,2) # max 30 obs when Nweeks = 2
+
+# computing complDaysRate
+prelqs[prelqs$Nweeks==1,"complDaysRate"] <- round(100*prelqs[prelqs$Nweeks==1,"complDays"]/5,2) # max 5 days when Nweeks = 1
+prelqs[prelqs$Nweeks==2,"complDaysRate"] <- round(100*prelqs[prelqs$Nweeks==2,"complDays"]/10,2) # max 10 days when Nweeks = 2
+
+# printing info
+cat("- No. complete responses per participants:",round(mean(prelqs$complObs),2),", SD =",round(sd(prelqs$complObs),2),
+    "\n- response rate per participants:",round(mean(prelqs$respRate),2),"%, SD =",round(sd(prelqs$respRate),2),
+    "%\n- No. complete days (Aft + Eve + Mor) per participants",round(mean(prelqs$complDays),2),
+    ", SD =",round(sd(prelqs$complDays),2),"\n- complete days rate per participants:",round(mean(prelqs$complDaysRate),2),
+    "%, SD =",round(sd(prelqs$complDaysRate),2),"%","\n-",nrow(prelqs[prelqs$Nweeks==2,]),"on",nrow(prelqs),
+    "participants involved for two weeks (",round(100*nrow(prelqs[prelqs$Nweeks==2,])/nrow(prelqs)),
+    "% )\n- mean No. of complete responses for those participating over 2 weeks =",
+    round(mean(prelqs[prelqs$Nweeks==2,"complObs"]),2),
+    "\n- mean No. of complete responses for those participating over 1 week =",
+    round(mean(prelqs[prelqs$Nweeks==1,"complObs"]),2))
+```
+
+<br>
+
+## 3.3. Blood pressure subsample
+
+In addition to filtering participant based on their compliance, we pre-registered the **exclusion of all participants reporting taking blood pressure medications `bp_drugs` or suffering from a cardiovascular dysfunction `cv_dysf` from the analyses of blood pressure**. Here, we describe such excluded participants and the subsample of participants included in blood pressure analyses.
+```{r  }
+# filtering participants with bp_drugs or cv_dysf
+BPout <- prelqs[prelqs$bp_drugs=="Yes" | prelqs$cv_dysf=="Yes",]
+BPin <- prelqs[prelqs$bp_drugs=="No" & prelqs$cv_dysf=="No",]
+
+# sample size for blood pressure
+cat(nrow(clean[clean$ID %in% levels(as.factor(as.character(BPin$ID))),]),"ovservations (days) from",
+    nlevels(as.factor(as.character(BPin$ID))),"participants included in BP analyses")
+
+# sociodemographics in excluded participants
+summary(BPout$gender); 100*summary(BPout$gender)/nrow(BPout) # gender (freq; %)
+mean(BPout$age); sd(BPout$age) # age (mean, SD)
+mean(BPout$BMI); sd(BPout$BMI) # BMI (mean, SD)
+
+# response rate in included participants
+cat("- No. complete responses per participants:",round(mean(BPin$complObs),2),", SD =",round(sd(BPin$complObs),2),
+    "\n- response rate per participants:",round(mean(BPin$respRate),2),"%, SD =",round(sd(BPin$respRate),2),
+    "%\n- No. complete days (Aft + Eve + Mor) per participants",round(mean(BPin$complDays),2),
+    ", SD =",round(sd(BPin$complDays),2),"\n- complete days rate per participants:",round(mean(BPin$complDaysRate),2),
+    "%, SD =",round(sd(BPin$complDaysRate),2),"%","\n-",nrow(BPin[BPin$Nweeks==2,]),"on",nrow(BPin),
+    "participants involved for two weeks (",round(100*nrow(BPin[BPin$Nweeks==2,])/nrow(BPin)),"% )")
+```
+
+<br>
+
+## 3.4. Quantitative variables
+
+Here, we use the `multidesc()` function for computing the descriptive statistics (mean, SD and ICC) of level-1 and level-2 variables. We can see that `WHLSM` shows an ICC of .60, indicating that most variance is located at the between-individual level, but within-individual variance is still substantial. Similar results are shown by blood pressure (ICC ranging from .61 to .73) and emotional exhaustion (ICC = .56), whereas higher proportions of within-individual variability are estimated for `SD`, `RDet`, and `RRel`.
+```{r warning=FALSE,message=FALSE}
+# selecting level-1 quantitative variables
+lv1 <- c("WHLSM","SBP_aft","DBP_aft", # afternoon
+         "SBP_eve","DBP_eve","EE","PD", # evening
+         "SD") # next morning
+
+# selecting level-2 quantitative variables
+lv2 <- c("age","BMI")
+
+# computing descriptives
+desc <- multidesc(long=clean,wide=prelqs,lv1=lv1,lv2=lv2)
+kable(desc)
+```
+
+<br>
+
+### 3.4.1. Survey duration
+
+Here, we inspect the mean, standard deviation, and distribution of diary survey durations. We can see that, after excluding a few outliers taking more than 30 minutes, the average response time to diary surveys was 4.02 minutes (SD = 3.51 min).
+```{r warning=FALSE,message=FALSE,fig.width=10,fig.height=3}
+# computing durations in minutes
+clean$dur_aft <- difftime(clean$end_aft,clean$start_aft,units="mins")
+clean$dur_eve <- difftime(clean$end_eve,clean$start_eve,units="mins")
+clean$dur_mor <- difftime(clean$end_mor,clean$start_mor,units="mins")
+vars <- paste0("dur_",c("aft","eve","mor"))
+clean[,vars] <- lapply(clean[,vars],as.numeric)
+clean$dur_mean <- apply(clean[,c("dur_aft","dur_eve","dur_mor")],1,mean,na.rm=TRUE)
+
+# plotting durations
+par(mfrow=c(1,4)); for(Var in c(vars,"dur_mean")){ 
+  hist(clean[,Var],breaks=100,main=paste(Var,"N =",length(na.omit(clean[,Var])))) }
+
+# No. cases > 30 min (8 to 15)
+for(Var in c(vars,"dur_mean")){ 
+  colnames(clean)[which(colnames(clean)==Var)] <- "Var"
+  cat(Var,"> 60 min:",nrow(clean[!is.na(clean$Var) & clean$Var > 30,]),"  ") 
+  colnames(clean)[which(colnames(clean)=="Var")] <- Var }
+
+# mean and standard deviation (in minutes) without considering such outliers
+round(mean(clean$dur_mean[clean$dur_mean<30],na.rm=TRUE),2)
+round(sd(clean$dur_mean[clean$dur_mean<30],na.rm=TRUE),2)
+
+# removing variables
+clean[,c(vars,"dur_mean")] <- NULL
+```
+
+<br>
+
+## 3.5. Correlations
+
+Second, we use the `multicorr` function to compute the between-individual (shown below the main diagonal) and the within-individual correlations (shown above the main diagonal) among the same continuous variables.
+```{r warning=FALSE,message=FALSE}
+cors <- multicorr(long=clean,wide=prelqs,lv1=lv1,lv2=lv2)
+kable(cors)
+```
+
+<br>
+
+Correlations are also graphically visualized below (blue = negative, white = uncorrelated, red = positive).
+```{r  fig.width=12,fig.height=8,warning=FALSE}
+ggplot(melt(as.matrix(multicorr(long=clean,wide=prelqs,lv1=lv1,lv2=lv2))),aes(x=Var1, y=Var2, fill=value)) + geom_tile() + 
+  geom_text(aes(x = Var1, y = Var2, label = round(value,2)),color="black",size=5)+labs(x="",y="") +
+  scale_fill_gradient2(low="darkblue",high="#f03b20",mid="white",midpoint=0,limit = c(-1,1), space = "Lab",
+                       guide="legend",breaks=round(seq(1,-1,length.out = 11),2))+
+  theme(text=element_text(face="bold",size=10),axis.text.x=element_text(angle=30))
+```
+
+<br>
+
+## 3.6. Univariate distributions
+
+Fourth, we visualize the univariate distributions of the focal variables, for each class of variables. We can see that level-1 self-reported predictors show quite skewed distributions. However, person-mean centered scores are approximately normally distributed.
+```{r fig.width=12,fig.height=6}
+# level-2
+par(mfrow=c(3,6)); for(Var in c(lv2,"gender","edu","mStatus","home_partner","children","home_child","position","sector",
+                                "smoker","careless","bp_drugs","horm_drugs","psy_drugs","cv_dysf","sleep_dysf")){
+  if(class(clean[,Var])%in%c("factor","logical")){ plot(clean[!duplicated(clean$ID),Var],main=Var,xlab="") 
+    } else { hist(clean[!duplicated(clean$ID),Var],main=Var,xlab="") }}
+
+# level-1 (composite scores)
+par(mfrow=c(3,6)); for(Var in c(lv1,"dailyHassles_eve","lateWorkHours","flagTime",
+                                "where_aft","teleWork","confounders_aft","confounders_eve",
+                                "flagBP_aft","flagBP_eve")){ 
+  if(class(clean[,Var])%in%c("factor","logical")){ plot(clean[!duplicated(clean$ID),Var],main=Var,xlab="") 
+    } else { hist(clean[!duplicated(clean$ID),Var],main=Var,xlab="") }}
+
+# level-1 (person-mean-centered scores)
+par(mfrow=c(2,4))
+for(Var in lv1){ wide <- clean[!duplicated(clean$ID),]
+  wide[,paste0(Var,".cm")] <- aggregate(clean[,Var],list(clean$ID),FUN=mean,na.rm=TRUE)[,2]
+  clean <- plyr::join(clean,wide[,c("ID",paste0(Var,".cm"))],by="ID",type="left")
+  clean[,paste0(Var,".mc")] <- clean[,Var] - clean[,paste0(Var,".cm")]
+  hist(clean[,paste0(Var,".mc")],main=Var,xlab="") 
+  clean <- clean[,1:(ncol(clean)-2)]}
+```
+
+<br>
+
+## 3.7. Bivariate distributions {.tabset .tabset-fade .tabset-pills}
+
+Fifth, we visualize the distribution of each focal variable (i.e., workaholism, blood pressure, emotional exhaustion, and sleep disturbances) and potential covariate against the following categorical variables:
+
+1. **Demographics**: `gender`, educational level `edu`, marital status `mStatus` and living with a partner `home_partner`, having children `children` and living with children `home_child`, job position `position` and `sector`
+
+2. **Inclusion criteria**: blood pressure `bp_drugs`, hormonal `horm_drugs`, and psychoactive medication `psy_drugs`, cardiovascular `cv_dysf` and sleep dysfunctions `sleep_dysf`
+
+3. **Level-2 confounders**: being a smoker `smoker` or a careless respondent `careless` 
+
+4. **Level-1 confounders**: daily nonwork hassles in the evening `dailyHassles_eve`, presence of late working hours in the evening `lateWorkHours`, atypical response times `flagTime`
+
+5. **Level-1 covariates**: survey location in the afternoon `where_aft`, remote working `teleWork`
+
+6. **BP confounders**: aggregated confounders score `confounders_aft` and `confounders_eve`; coffee `coffe_aft`, `coffe_eve`; smoking `smoke_aft`, `smoke_eve`; vigorous physical activity `sport_aft`, `sport_eve`, having a meal `meal_aft`, `meal_eve`; and flagged BP cases `flagBP_aft`, `flagBP_eve` (see [Supplementary Material S3](https://Luca-Menghini.github.io/the-daily-costs-of-workaholism/S3_preProcessing/S3_data-processing-code-and-output.html))
+
+<br>
+
+The `bivPlot` function is used to optimize the data visualization.
+
+<details><summary>`bivPlot()`</summary>
+<p>
+```{r }
+bivPlot <- function(data,resp,preds){ require(ggplot2)
+ for(Var in preds){ 
+   print(
+     ggplot(na.omit(data[,c(resp,Var)]),aes_string(x=Var,y=resp,fill=Var)) + 
+       geom_point(col="gray",position=position_jitter(width=.15)) + # data points
+       geom_violin(alpha=.4) + geom_boxplot(width=0.3,alpha=0.2) + # violin & boxplot
+       ggtitle(paste(resp,"by",Var)) + theme(legend.position="none") # title and removing legend
+     )}}
+```
+</p>
+</details>
+
+<br>
+
+### DEMOS {.tabset .tabset-fade .tabset-pills}
+
+#### WHLSM
+
+Higher `WHLSM` can be observed in cases where `children = "No"` or `home_child = "No"` (with larger differences for the latter), where `partner = "No"`, and where `edu = "university+"`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="WHLSM",pred=c("gender","edu","children","home_child","partner","home_partner","position","sector"))
+```
+
+<br>
+
+#### BP {.tabset .tabset-fade .tabset-pills}
+
+Blood pressure is mainly affected by `children`, with `SBP_aft`, `SBP_eve` and morning blood pressure also showing differences by `gender`, while morning blood pressure is also affected by `partner`.
+
+##### SBP_aft
+
+Higher `SBP_aft` can be observed in cases where `gender = "M"`, `children = "Yes"` or `home_child = "Yes"` (with larger differences for the former), with slightly higher `SBP_aft` in cases where `partner = "Yes"`, where `edu = "highschool-"`, and where `position = "employer_mng"`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SBP_aft",pred=c("gender","edu","children","home_child","partner","home_partner","position","sector"))
+```
+
+<br>
+
+##### DBP_aft
+
+Higher `DBP_aft` can be observed in cases where `children = "Yes"` or `home_child = "Yes"` (with larger differences for the former), with slightly higher `DBP_aft` in cases where `partner = "Yes"`, and where `sector = "public"`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="DBP_aft",pred=c("gender","edu","children","home_child","partner","home_partner","position","sector"))
+```
+
+<br>
+
+##### SBP_eve
+
+Higher `SBP_eve` can be observed in cases where `gender = "M"`, `children = "Yes"` or `home_child = "Yes"` (with larger differences for the former), with slightly higher `SBP_aft` in cases where `partner = "Yes"`, where `edu = "highschool+"`, and where `sector = "Public"`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SBP_eve",pred=c("gender","edu","children","home_child","partner","home_partner","position","sector"))
+```
+
+<br>
+
+##### DBP_eve
+
+Slightly higher `DBP_eve` can be observed in cases where `children = "Yes"` or `home_child = "Yes"` (with larger differences for the former), were `partner = "Yes"`, and where `sector = "public"`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="DBP_eve",pred=c("gender","edu","children","home_child","partner","home_partner","position","sector"))
+```
+
+<br>
+
+#### EE
+
+Higher `EE` can be observed in cases where `home_child = "No"`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="EE",pred=c("gender","edu","children","home_child","partner","home_partner","position","sector"))
+```
+
+<br>
+
+#### SD
+
+Higher `SD` can be observed in cases where `gender = "F"`, where `home_child = "Yes"`, where `home_partner = "No"`, and where `position = "employee_proj"`.
+```{r fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SD",pred=c("gender","edu","children","home_child","partner","home_partner","position","sector"))
+```
+
+<br>
+
+### INCLUSION {.tabset .tabset-fade .tabset-pills}
+
+#### WHLSM
+
+Higher `WHLSM` can be observed in cases where `bp_drugs = "Yes"`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="WHLSM",pred=c("bp_drugs", "horm_drugs", "psy_drugs", "cv_dysf", "sleep_dysf"))
+```
+
+<br>
+
+#### BP {.tabset .tabset-fade .tabset-pills}
+
+Blood pressure is mainly affected by `bp_drugs`, and `cv_dysf`, which further corroborate the validity of our blood pressure measurements and the importance of our pre-registered exclusion criteria.
+
+##### SBP_aft
+
+Higher `SBP_aft` can be observed in cases where `bp_drugs = "Yes"` and `cv_dysf = "Yes"`, with only a slightly lower `SBP_aft` in cases where  `horm_drugs = "No"`. 
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SBP_aft",pred=c("bp_drugs", "horm_drugs", "psy_drugs", "cv_dysf", "sleep_dysf"))
+```
+
+<br>
+
+##### DBP_aft
+
+Higher `DBP_aft` can be observed in cases where `bp_drugs = "Yes"` and `cv_dysf = "Yes"`, with only a slightly lower `DBP_aft` in cases where  `horm_drugs = "No"`. 
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="DBP_aft",pred=c("bp_drugs", "horm_drugs", "psy_drugs", "cv_dysf", "sleep_dysf"))
+```
+
+<br>
+
+##### SBP_eve
+
+Higher `SBP_eve` can be observed in cases where `bp_drugs = "Yes"` and `cv_dysf = "Yes"`. 
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SBP_eve",pred=c("bp_drugs", "horm_drugs", "psy_drugs", "cv_dysf", "sleep_dysf"))
+```
+
+<br>
+
+##### DBP_eve
+
+Higher `DBP_eve` can be observed in cases where `bp_drugs = "Yes"` and `cv_dysf = "Yes"`. 
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="DBP_eve",pred=c("bp_drugs", "horm_drugs", "psy_drugs", "cv_dysf", "sleep_dysf"))
+```
+
+<br>
+
+#### EE
+
+Higher `EE` can be observed in cases where `bp_drugs = "Yes"` or `psy_drugs = "Yes"`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="EE",pred=c("bp_drugs", "horm_drugs", "psy_drugs", "cv_dysf", "sleep_dysf"))
+```
+
+<br>
+
+#### SD
+
+`SD` does not substantially differ across inclusion criteria levels, with only slightly higher `SD` for those reporting `bp_drugs = "Yes"`. Critically, `SD` does not substantially differ across `sleep_dysf` levels, corroborating our choice to not rely on this inclusion criterion (see [Supplementary Material S7](https://osf.io/bprvg)).
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SD",pred=c("bp_drugs", "horm_drugs", "psy_drugs", "cv_dysf", "sleep_dysf"))
+```
+
+<br>
+
+### LV-2 CONF {.tabset .tabset-fade .tabset-pills}
+
+#### WHLSM
+
+`WHLSM` does not substantially differ across level-2 confounders levels, with only slightly higher `WHLSM` in those with `smoker = "quit_less`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="WHLSM",pred=c("smoker","careless"))
+```
+
+<br>
+
+#### BP {.tabset .tabset-fade .tabset-pills}
+
+Blood pressure is not substantially affected by level-2 confounders. Although it is lower in potentially `careless` participants, this might be due to the very small number of such cases.
+
+##### SBP_aft
+
+`SBP_aft` does not substantially differ across level-2 confounders levels. Although it is lower in potentially `careless` participants, this might be due to the very small number of such cases.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SBP_aft",pred=c("smoker","careless"))
+```
+
+<br>
+
+##### DBP_aft
+
+`DBP_aft` is slightly lower in `smoker` participants. Although it is lower in potentially `careless` participants, this might be due to the very small number of such cases.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="DBP_aft",pred=c("smoker","careless"))
+```
+
+<br>
+
+##### SBP_eve
+
+`SBP_eve` does not substantially differ across level-2 confounders levels. Although it is lower in potentially `careless` participants, this might be due to the very small number of such cases.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SBP_eve",pred=c("smoker","careless"))
+```
+
+<br>
+
+##### DBP_eve
+
+`DBP_eve` is slightly lower in `smoker` participants. Although it is lower in potentially `careless` participants, this might be due to the very small number of such cases.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="DBP_eve",pred=c("smoker","careless"))
+```
+
+<br>
+
+#### EE
+
+`EE` does not substantially differ across level-2 confounders levels.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="EE",pred=c("smoker","careless"))
+```
+
+<br>
+
+#### SD
+
+`SD` is lower in individuals with `smoker = "Yes"`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SD",pred=c("smoker","careless"))
+```
+
+<br>
+
+### LV-1 CONF {.tabset .tabset-fade .tabset-pills}
+
+#### WHLSM
+
+Slightly higher `WHLSM` can be observed in cases where `lateWorkHours = TRUE`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="WHLSM",pred=c("dailyHassles_eve","lateWorkHours","flagTime"))
+```
+
+<br>
+
+#### BP {.tabset .tabset-fade .tabset-pills}
+
+Blood pressure is not substantially affected by level-1 confounders.
+
+##### SBP_aft
+
+`SBP_aft` does not substantially differ across level-1 confounders levels.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SBP_aft",pred=c("dailyHassles_eve","lateWorkHours","flagTime"))
+```
+
+<br>
+
+##### DBP_aft
+
+`DBP_aft` does not substantially differ across level-1 confounders levels, with only slightly higher `DBP_aft` in cases where `lateWorkHours = TRUE`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="DBP_aft",pred=c("dailyHassles_eve","lateWorkHours","flagTime"))
+```
+
+<br>
+
+##### SBP_eve
+
+`SBP_eve` does not substantially differ across level-1 confounders levels, with only slightly higher `SBP_eve` in cases where `lateWorkHours = TRUE`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SBP_eve",pred=c("dailyHassles_eve","lateWorkHours","flagTime"))
+```
+
+<br>
+
+##### DBP_eve
+
+`DBP_eve` does not substantially differ across level-1 confounders levels, with only slightly lower `DBP_eve` in cases where `flagTime = TRUE`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="DBP_eve",pred=c("dailyHassles_eve","lateWorkHours","flagTime"))
+```
+
+<br>
+
+#### EE
+
+Lower `EE` can be observed in cases where `dailyHassles_eve = "Yes"`
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="EE",pred=c("dailyHassles_eve","lateWorkHours","flagTime"))
+```
+
+<br>
+
+#### SD
+
+Higher `SD` can be observed in cases where `dailyHassles_eve = "Yes"`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SD",pred=c("dailyHassles_eve","lateWorkHours","flagTime"))
+```
+
+<br>
+
+### LV-1 COV {.tabset .tabset-fade .tabset-pills}
+
+#### WHLSM
+
+Higher `WHLSM` can be observed in cases where `where_aft = "workplace"`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="WHLSM",pred=c("where_aft","teleWork"))
+```
+
+<br>
+
+#### BP {.tabset .tabset-fade .tabset-pills}
+
+Blood pressure is not substantially affected by level-1 confounders, with only slightly lower `SBP_aft` in cases where `teleWork = "Yes"`.
+
+##### SBP_aft
+
+`SBP_aft` is slightly lower in cases where `teleWork = "teleWork"`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SBP_aft",pred=c("where_aft","teleWork"))
+```
+
+<br>
+
+##### DBP_aft
+
+`DBP_aft` does not substantially differ across the levels of level-1 covariates. Although slightly higher `DBP_aft` is shown in cases where `teleWork = "both"`, this might be due to the small number of such cases.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="DBP_aft",pred=c("where_aft","teleWork"))
+```
+
+<br>
+
+##### SBP_eve
+
+`SBP_eve` does not substantially differ across the levels of level-1 covariates. Although slightly higher `SBP_eve` is shown in cases where `teleWork = "both"` or where `where_aft = "other"`, this might be due to the small number of such cases.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SBP_eve",pred=c("where_aft","teleWork"))
+```
+
+<br>
+
+##### DBP_eve
+
+`DBP_eve` does not substantially differ across the levels of level-1 covariates. Although slightly higher `DBP_eve` is shown in cases where `teleWork = "both"`, this might be due to the small number of such cases.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="DBP_eve",pred=c("where_aft","teleWork"))
+```
+
+<br>
+
+#### EE
+
+Slightly higher `EE` can be observed in cases where `teleWork = "both"`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="EE",pred=c("where_aft","teleWork"))
+```
+
+<br>
+
+#### SD
+
+Lower `SD` can be observed in cases where `teleWork = "both"`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SD",pred=c("where_aft","teleWork"))
+```
+
+<br>
+
+### BP CONF {.tabset .tabset-fade .tabset-pills}
+
+#### WHLSM
+
+Higher `WHLSM` can be observed in all cases where `confounders = FALSE`, with larger differences by `confounders_eve`. Differences by specific confounder are in line with those showed by the aggregated scores. Lower `WHLSM` can be observed in cases where `flagBP_eve = TRUE`.
+```{r  fig.width=3,fig.height=2.5,warning=FALSE}
+bivPlot(diary,resp="WHLSM",pred=c("confounders_aft", "confounders_eve",
+                                  "coffee_aft", "coffee_eve", "smoke_aft", "smoke_eve", 
+                                  "sport_aft", "sport_eve", "meal_aft", "meal_eve", 
+                                  "flagBP_aft", "flagBP_eve"))
+```
+
+<br>
+
+#### BP {.tabset .tabset-fade .tabset-pills}
+
+Only systolic blood pressure is slightly affected by BP confounders.
+
+##### SBP_aft
+
+Only afternoon confounders are considered for `SBP_aft`, which is only slightly higher in cases where `confounders_aft = TRUE`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SBP_aft",pred=c("confounders_aft","coffee_aft","smoke_aft","sport_aft","meal_aft","flagBP_aft"))
+```
+
+<br>
+
+##### DBP_aft
+
+Only afternoon confounders are considered for `DBP_aft`, which is only slightly lower in cases where `coffe_aft` or `smoke_aft = 1`, slightly higher in cases where `sport_aft` or `meal_aft = TRUE`. Although higher `DBP_aft` is shown in cases where `flagBP_aft = TRUE`, this might be due to the small number of such cases.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="DBP_aft",pred=c("confounders_aft","coffee_aft","smoke_aft","sport_aft","meal_aft","flagBP_aft"))
+```
+
+<br>
+
+##### SBP_eve
+
+Only evening confounders are considered for `SBP_eve`, which is slightly higher in cases where `confounders_eve = TRUE`, and higher in cases where `flagBP_eve = TRUE`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="SBP_eve",pred=c("confounders_eve","coffee_eve","smoke_eve","sport_eve","meal_eve","flagBP_eve"))
+```
+
+<br>
+
+##### DBP_eve
+
+Only evening confounders are considered for `DBP_eve`, which does not substantially differ across the levels of `confounders_eve`, whereas slightly higher `DBP_eve` can be observed in cases where `flagBP_eve = TRUE`.
+```{r  fig.width=4,fig.height=3,warning=FALSE}
+bivPlot(diary,resp="DBP_eve",pred=c("confounders_eve","coffee_eve","smoke_eve","sport_eve","meal_eve","flagBP_eve"))
+```
+
+<br>
+
+#### EE
+
+`EE` does not substantially differ across blood pressure confounder levels, with only  higher `EE` when `sport_eve = "TRUE"`.
+```{r  fig.width=3,fig.height=2.5,warning=FALSE}
+bivPlot(diary,resp="EE",pred=c("confounders_aft", "confounders_eve",
+                               "coffee_aft", "coffee_eve", "smoke_aft", "smoke_eve",
+                               "sport_aft", "sport_eve", "meal_aft", "meal_eve"))
+```
+
+<br>
+
+#### SD
+
+`SD` does not substantially differ across blood pressure confounder levels, with only a slightly lower `SD` when `smoke_eve = "TRUE"`.
+```{r  fig.width=3,fig.height=2.5,warning=FALSE}
+bivPlot(diary,resp="SD",pred=c("confounders_aft", "confounders_eve",
+                               "coffee_aft", "coffee_eve", "smoke_aft", "smoke_eve",
+                               "sport_aft", "sport_eve", "meal_aft", "meal_eve"))
+```
+
+<br>
+
+# 4. Covariate selection
+
+As pre-registered, for maximizing model parsimony while minimizing the risk of non-convergence, the covariates to be included in the following regression analyses are selected based on an **empirical approach** accounting for the following criteria:
+
+1. The No. of cases in each level, prioritizing categorical covariates with **balanced number of cases**
+
+2. The bivariate distributions and correlations with the response variable, prioritizing covariates showing **some potential covariance trend** with the response variable
+
+3. Linear modeling, prioritizing the covariates whose inclusion as predictor of the corresponding response variable shows **stronger evidence** (i.e., higher Akaike weight) than more parsimonious models and **absolute t-value of 2 or higher**
+
+However, deviating from the pre-registration (see [Supplementary Material S7](https://osf.io/bprvg)), we also consider **theoretical arguments** concerning some important covariates. Particularly, we prioritize level-1 over level-2 covariates as our study is focused on within-individual relationships. Moreover, following [Spector (2021)](#ref), we attempt to avoid risking to rule out variables acting as potential exploratory mechanisms (e.g., mediators) of the focused relationships. Theoretical arguments are detailed below for each response variable.
+
+The following packages are used to optimize the analyses.
+```{r warning=FALSE,message=FALSE}
+library(lme4); library(MuMIn)
+```
+
+<br>
+
+## 4.1. Afternoon BP
+
+For afternoon systolic and diastolic blood pressure, the pre-registered potential covariates to be considered are:
+
+1. `gender`, in light of the robust literature on sex differences in blood pressure and hypertension (e.g., [Sandberg & Ji, 2012]), with gender having been highlighted as a potential moderator of the straining effects of trait workaholism (e.g., [Bladucci et al., 2018; 2021](#ref)).
+
+2. `age`, in light of the consolidated relationship between aging and high blood pressure; however, no clear differences have been highlighted on the relationship between age and workaholism ([Clark et al., 2016](#ref)).
+
+3. `BMI`, in light of the robust literature on the increased risk for hypertension and CVD in individuals with higher BMI (e.g., [Gregg et al., 2005](#ref)); however, no clear differences have been highlighted, to our knowledge, on the relationship between BMI and workaholism.
+
+4. Participants' smoking status `smoker`, in light of the widely acknowledged relationship between smoking and hypertension; however, no clear differences have been highlighted, to our knowledge, on the relationship between smoking status and workaholism.
+
+5. The daily number of worked hours `workHours`, as long working hours is a definitional aspect of workaholism which has been found positively associated with higher blood pressure and other cardiovascular risks ([Virtanen, 2012](#ref)); however, controlling for this variable might risk to artificially deflate the relationship between workaholism and blood pressure since the former might influence the latter through working hours. That is, working hours is a **potential explanatory mechanism** of the focused relationship, and including it as a control variable might bias rather than strengthening the results (see [Spector et al., 2021](#ref)).
+
+6. Remote work `teleWork`, although with no clear expectations on its relationship with blood pressure, while we originally hypothesized that remote working might act as a moderator of the straining effect of workaholism.
+
+7. BP `confounders_aft` identifying behavioral factors (e.g., smoking, physical activity) that might affect blood pressure, although with no clear expectation on their relationship with workaholism. 
+
+Further pre-registered level-2 covariates (i.e., retrospective measures of trait workaholism, technostress creators) are not included due to our aim to focus the study on the focused level-1 variables, whereas recovery experiences will be included in all models. Moreover, we do not include the previous BP measure as we focus on the covariance of intra-individual fluctuations between workaholism and blood pressure, rather than the change of the latter over time (see [Supplementary material S7](https://osf.io/bprvg)). In contrast, additional (i.e., not pre-registered) level-2 covariates potentially moderating the relationship between workaholism and afternoon blood pressure are considered as potentially confounding factors.
+
+Prior to evaluate the inclusion of each covariate, we prepare the data for the analyses. That is, we remove cases of missing responses in the response variable or any covariate (**list-wise deletion**) and we center level-1 continuous covariates on the individual mean (**person-mean-centering**). Moreover, we apply our inclusion criteria by removing all cases with `bp_drugs` or `cv_dysf = "Yes"`. 
+```{r }
+# inclusion criteria
+cleanBP <- clean[clean$bp_drugs=="No" & clean$cv_dysf=="No",]
+
+# list-wise deletion
+cleanBP <- as.data.frame(na.omit(cleanBP[,c("ID","day","SBP_aft","DBP_aft",
+                                        "gender","age","BMI","smoker","workHours",
+                                        "teleWork","confounders_aft",
+                                        "home_child","children")]))
+cat("Considering",nrow(cleanBP),"complete observations from",nlevels(as.factor(as.character(cleanBP$ID))),"participants")
+
+# mean centering lv-1 continuous covariates
+for(Var in c("workHours")){
+  wide <- prelqs[prelqs$ID%in%levels(as.factor(as.character(cleanBP$ID))),]
+  wide <- cbind(wide,aggregate(cleanBP[,Var],list(cleanBP$ID),mean)[,2]) # computing individual means
+  colnames(wide)[ncol(wide)] <- paste0(Var,".cm")
+  cleanBP <- join(cleanBP,wide[,c("ID",paste0(Var,".cm"))],by="ID",type="left") # joining with long-form data
+  cleanBP[,paste0(Var,".mc")] <- cleanBP[,Var] - cleanBP[,paste0(Var,".cm")] } # computing mean-centered scores
+```
+
+<br>
+
+### 4.1.1. gender {.tabset .tabset-fade .tabset-pills}
+
+`gender` is a categorical variable with a roughly balanced number of participants. In section 3.5 we observed some tendency with higher `SBP_aft` in men than in women. Consistently, its inclusion in the null model shows improved evidence (i.e., higher Akaike weight) compared to the null model, although the estimated t-value is lower than 2, with a particularly low value for `DBP_aft`. In both cases, also considering its theoretical relevance as a potential moderator of the straining effects of workaholism (e.g., [Balducci et al. (2018; 2021)](#ref)) **we include `gender` as a covariate**.
+
+#### SBP_aft
+```{r }
+# number of cases by covariate level
+summary(cleanBP[!duplicated(cleanBP$ID),"gender"]) # No. participants
+summary(cleanBP$gender) # No. cases
+
+# model comparison
+m0 <- lmer(SBP_aft ~ (1|ID),data=cleanBP)
+m1 <- lmer(SBP_aft ~ gender + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1)) # Akaike weights: stronger evidence including gender
+summary(m1)$coefficients # coefficient: proximal to |t|=2
+```
+
+<br>
+
+#### DBP_aft
+```{r }
+# model comparison
+m0d <- lmer(DBP_aft ~ (1|ID),data=cleanBP)
+m1d <- lmer(DBP_aft ~ gender + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d)) # Akaike weights: stronger evidence including gender
+summary(m1d)$coefficients # coefficient: lower than |t|=2
+```
+
+<br>
+
+### 4.1.2. age {.tabset .tabset-fade .tabset-pills}
+
+`age` is a level-2 continuous variable that in section 3.2 showed moderate-to-strong positive relationships with blood pressure (*r* from .42 to .52). Consistently, its inclusion in the model including `gender` implies stronger evidence than more parsimonious models, with an absolute t-value higher than 2. Thus, despite the uncertainty on its relationship with workaholism, we **include `age` as a covariate** for afternoon blood pressure.
+
+#### SBP_aft
+```{r }
+# model comparison vs null
+m1.bis <- lmer(SBP_aft ~ age + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison vs gender
+m2 <- lmer(SBP_aft ~ gender + age + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2)) # Akaike weights: stronger evidence than previous model
+summary(m2)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+#### DBP_aft
+```{r }
+# model comparison vs null
+m1.bisd <- lmer(DBP_aft ~ age + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison vs gender
+m2d <- lmer(DBP_aft ~ gender + age + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d)) # Akaike weights: stronger evidence than previous model
+summary(m2)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+### 4.1.3. BMI {.tabset .tabset-fade .tabset-pills}
+
+`BMI` is a level-2 continuous variable that in section 3.2 showed weak-to-moderate positive relationships with blood pressure (*r* from .28 to .43). Consistently, its inclusion in the model including `gender` and `age` implies stronger evidence than more parsimonious models, with an absolute t-value higher than 2. Thus, despite the uncertainty on its relationship with workaholism, we **include `BMI` as a covariate** for afternoon blood pressure.
+
+#### SBP_aft
+```{r }
+# model comparison vs null
+m1.bis <- lmer(SBP_aft ~ BMI + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison vs previous model
+m3 <- lmer(SBP_aft ~ gender + age + BMI + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3)) # Akaike weights: stronger evidence than previous model
+summary(m3)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+#### DBP_aft
+```{r }
+# model comparison vs null
+m1.bisd <- lmer(DBP_aft ~ BMI + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bisd)$coefficients # coefficient: |t| > 2
+
+# model comparison vs previous model
+m3d <- lmer(DBP_aft ~ gender + age + BMI + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d)) # Akaike weights: stronger evidence than previous model
+summary(m3d)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+### 4.1.4. smoker {.tabset .tabset-fade .tabset-pills}
+
+`smoker` is a level-2 categorical variable that in section 3.5 did not show substantially relationships with blood pressure. Consistently, both models show an absolute t-value lower than 2, although its inclusion implies stronger evidence than more parsimonious models. Also considering the uncertainty of its relationship with workaholism, we **do not include** it as a covariate for afternoon blood pressure.
+
+#### SBP_aft
+```{r }
+# model comparison vs null
+m1.bis <- lmer(SBP_aft ~ smoker + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4 <- lmer(SBP_aft ~ gender + age + BMI + smoker + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: stronger evidence than previous model
+summary(m4)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+#### DBP_aft
+```{r }
+# model comparison vs null
+m1.bisd <- lmer(DBP_aft ~ smoker + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4d <- lmer(DBP_aft ~ gender + age + BMI + smoker + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: stronger evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.1.5. WorkHours {.tabset .tabset-fade .tabset-pills}
+
+`workHours` is a level-1 continuous variable that in section 3.2 was weakly correlated with afternoon blood pressure (*r* = .12-.04). Here, its inclusion implies stronger evidence (i.e., higher Akaike weight) than more parsimonious models, with an estimated absolute t-value higher than 2. However, we consider the theoretical importance of this variable, which might be a potential explanatory mechanism (e.g., mediator) through which workaholism might impact on blood pressure, and thus, **we do not include** it as a covariate for afternoon blood pressure.
+
+#### SBP_aft
+```{r }
+# model comparison vs null
+m1.bis <- lmer(SBP_aft ~ workHours.mc + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison vs previous model
+m4 <- lmer(SBP_aft ~ gender + age + BMI + workHours.mc + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: stronger evidence than previous model
+summary(m4)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+#### DBP_aft
+```{r }
+# model comparison vs null
+m1.bisd <- lmer(DBP_aft ~ workHours.mc + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison vs previous model
+m4d <- lmer(DBP_aft ~ gender + age + BMI + workHours.mc + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: stronger evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+### 4.1.6. teleWork {.tabset .tabset-fade .tabset-pills}
+
+`teleWork` is a level-1 categorical variable that in section 3.5 only showed some slight difference in afternoon blood pressure. Here, whereas its inclusion implies weaker evidence than more parsimonious models, absolute t-values are lower than 2. Thus, also considering the unbalanced number of cases per level and the uncertainty of its relationship with both workaholism and blood pressure, **we do not include** it as a covariate for afternoon blood pressure.
+
+#### SBP_aft
+```{r }
+# number of cases by covariate level
+summary(cleanBP$teleWork) # currently 4 categories
+cleanBP$teleWork <- as.factor(gsub("both","teleWork",gsub("dayOff","teleWork",cleanBP$teleWork))) # recoding to 2 categories
+summary(cleanBP$teleWork)
+
+# model comparison vs null
+m1.bis <- lmer(SBP_aft ~ teleWork + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4 <- lmer(SBP_aft ~ gender + age + BMI + teleWork + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: stronger evidence than previous model
+summary(m4)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+#### DBP_aft
+```{r }
+# model comparison vs null
+m1.bisd <- lmer(DBP_aft ~ teleWork + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4d <- lmer(DBP_aft ~ gender + age + BMI + teleWork + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: stronger evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.1.7. confounders_aft {.tabset .tabset-fade .tabset-pills}
+
+`confounders_aft` is a level-1 categorical variable that in section 3.5 only showed some slight difference in afternoon blood pressure. Consistently, its inclusion implies weaker evidence than more parsimonious models. However, absolute t-values are lower than 2. Thus, also considering the unbalanced number of cases per level and the uncertainty of its relationship with  workaholism, **we do not include** it as a covariate for afternoon blood pressure.
+
+#### SBP_aft
+```{r }
+# number of cases by covariate level
+summary(cleanBP$confounders_aft)
+
+# model comparison vs null
+m1.bis <- lmer(SBP_aft ~ confounders_aft + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4 <- lmer(SBP_aft ~ gender + age + BMI + confounders_aft + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: stronger evidence than previous model
+summary(m4)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+#### DBP_aft
+```{r }
+# model comparison vs null
+m1.bisd <- lmer(DBP_aft ~ confounders_aft + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4d <- lmer(DBP_aft ~ gender + age + BMI + confounders_aft + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: stronger evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+### 4.1.8. Other covariates {.tabset .tabset-fade .tabset-pills}
+
+In addition to the pre-registered covariates, we consider a **further level-2 covariate** that in section 3.5 showed substantial trends in both afternoon blood pressure and workaholism, and whose potential influence on both variables can be theoretically argued, namely having **children** `children` or living with children `home_child`. Indeed, respondents reporting to live with their children reported higher afternoon blood pressure, whereas those reporting to have children reported slightly lower workaholism (see section 3.5). Theoretically, it is plausible although not consistently reported by previous research (see [Clark et al., 2016](#ref)) that workaholism levels and overall investment in the work vs. family domain are influenced by family needs and presence of children in the household. On the other hand, family needs and living with children might negatively impact on blood pressure. Thus, both `children` and `home_child` might be a common external variable influencing both workaholism and afternoon, and we consider it as a further potential covariate.
+
+Although both `children` and `home_child` have an acceptably balanced number of cases per level and both imply stronger evidence than more parsimonious models, none of them show an absolute *t* value higher than 2. Thus, also in this case, **we do not include** these two variables as covariates for afternoon blood pressure.
+
+#### SBP_aft
+```{r }
+# number of cases by covariate level
+summary(cleanBP[!duplicated(cleanBP$ID),"children"]) # children: No. participants
+summary(cleanBP$children) # children: No. cases
+summary(cleanBP[!duplicated(cleanBP$ID),"home_child"]) # home_child: No. participants
+summary(cleanBP$home_child) # home_child: No. cases
+
+# model comparison children vs null
+m1.bis <- lmer(SBP_aft ~ children + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison home_child vs null
+m1.bis <- lmer(SBP_aft ~ home_child + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison children vs previous model
+m4 <- lmer(SBP_aft ~ gender + age + BMI + children + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: stronger evidence than previous model
+summary(m4)$coefficients # coefficient: |t| < 2
+
+# model comparison home_child vs previous model
+m4 <- lmer(SBP_aft ~ gender + age + BMI + home_child + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: stronger evidence than previous model
+summary(m4)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+#### DBP_aft
+```{r }
+# model comparison children vs null
+m1.bisd <- lmer(DBP_aft ~ children + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison home_child vs null
+m1.bisd <- lmer(DBP_aft ~ home_child + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison children vs previous model
+m4d <- lmer(DBP_aft ~ gender + age + BMI + children + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: stronger evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| < 2
+
+# model comparison home_child vs previous model
+m4d <- lmer(DBP_aft ~ gender + age + BMI + home_child + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: stronger evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.1.9. Time trends {.tabset .tabset-fade .tabset-pills}
+
+As a final, not pre-registered, control, we inspect the **linear time trends** of the outcome variable. This is done by including the number of `day`s since the beginning of the study as a further covariate. We can see that the inclusion of `day` does not imply stronger evidence than more parsimonious models, with an absolute *t* value lower than 2. Thus, we chose to **not include** `day` as a covariate for afternoon blood pressure.
+
+#### SBP_aft
+```{r }
+# plotting SBP_aft by day
+boxplot(SBP_aft ~ day,data=cleanBP)
+
+# model comparison vs null
+m1.bis <- lmer(SBP_aft ~ day + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4 <- lmer(SBP_aft ~ gender + age + BMI + day + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: weaker evidence than previous model
+summary(m4)$coefficients # coefficient: |t| < 2
+
+
+```
+
+<br>
+
+#### DBP_aft
+```{r }
+# plotting DBP_aft by day
+boxplot(DBP_aft ~ day,data=cleanBP)
+
+# model comparison vs null
+m1.bisd <- lmer(DBP_aft ~ day + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4d <- lmer(DBP_aft ~ gender + age + BMI + day + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: weaker evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+## 4.2. Evening BP
+
+For evening systolic and diastolic blood pressure, the pre-registered potential covariates to be considered are:
+
+1. `gender`, in light of the robust literature on sex differences in blood pressure and hypertension (e.g., [Sandberg & Ji, 2012]), with gender having been highlighted as a potential moderator of the straining effects of trait workaholism (e.g., [Bladucci et al., 2018; 2021](#ref)).
+
+2. `age`, in light of the consolidated relationship between aging and high blood pressure; however, no clear differences have been highlighted on the relationship between age and workaholism ([Clark et al., 2016](#ref)).
+
+3. `BMI`, in light of the robust literature on the increased risk for hypertension and CVD in individuals with higher BMI (e.g., [Gregg et al., 2005](#ref)); however, no clear differences have been highlighted, to our knowledge, on the relationship between BMI and workaholism.
+
+4. Participants' smoking status `smoker`, in light of the widely acknowledged relationship between smoking and hypertension; however, no clear differences have been highlighted, to our knowledge, on the relationship between smoking status and workaholism.
+
+5. The daily number of worked hours `workHours`, as long working hours is a definitional aspect of workaholism which has been found positively associated with higher blood pressure and other cardiovascular risks ([Virtanen, 2012](#ref)); however, controlling for this variable might risk to artificially deflate the relationship between workaholism and blood pressure since the former might influence the latter through working hours. That is, working hours is a **potential explanatory mechanism** of the focused relationship, and including it as a control variable might bias rather than strengthening the results (see [Spector et al., 2021](#ref)).
+
+6. The occurrence of late working hours in the evening `lateWorkHours`, consistently with what argued above for `workHours`; also in this case, controlling for this variable might risk to rule out a **potential explanatory mechanism** of the relationship between workaholism and blood pressure.
+
+7. Nonwork hassles in the evening `dailyHassles_eve`, as hassles have been related to high blood pressure (e.g., [Nyklíček et al. 1999](#ref)) and nonwork hassles such as relationship tension have been recently related to state workaholism ([Clark et al., 2021](#ref)); also in this case, such an argument imply that nonwork hassles are a **potential explanatory mechanism** of the focused relationship.
+
+8. Remote work `teleWork`, although with no clear expectations on its relationship with blood pressure, while we originally hypothesized that remote working might act as a moderator of the straining effect of workaholism.
+
+9. BP `confounders_eve` identifying behavioral factors (e.g., smoking, physical activity) that might affect blood pressure, although with no clear expectation on their relationship with workaholism. 
+
+Further pre-registered level-2 covariates (i.e., retrospective measures of trait workaholism, technostress creators) are not included due to our aim to focus the study on the focused level-1 variables, whereas recovery experiences will be included in all models. Moreover, we do not include the previous BP measure as we focus on the covariance of intra-individual fluctuations between workaholism and blood pressure, rather than the change of the latter over time (see [Supplementary material S7](https://osf.io/bprvg)). In contrast, additional (i.e., not pre-registered) level-2 covariates potentially moderating the relationship between workaholism and evening blood pressure are considered as potentially confounding factors.
+
+Prior to evaluate the inclusion of each covariate, we prepare the data for the analyses. That is, we remove cases of missing responses in the response variable or any covariate (**list-wise deletion**) and we center level-1 continuous covariates on the individual mean (**person-mean-centering**). Moreover, we apply our inclusion criteria by removing all cases with `bp_drugs` or `cv_dysf = "Yes"`. 
+```{r }
+# inclusion criteria
+cleanBP <- clean[clean$bp_drugs=="No" & diary$cv_dysf=="No",]
+
+# list-wise deletion
+cleanBP <- as.data.frame(na.omit(cleanBP[,c("ID","day","SBP_eve","DBP_eve",
+                                        "gender","age","BMI","smoker","workHours",
+                                        "lateWorkHours","dailyHassles_eve","teleWork","confounders_eve",
+                                        "home_child","children")]))
+cat("Considering",nrow(cleanBP),"complete observations from",nlevels(as.factor(as.character(cleanBP$ID))),"participants")
+
+# mean centering lv-1 continuous covariates
+for(Var in c("workHours")){
+  wide <- prelqs[prelqs$ID%in%levels(as.factor(as.character(cleanBP$ID))),]
+  wide <- cbind(wide,aggregate(cleanBP[,Var],list(cleanBP$ID),mean)[,2]) # computing individual means
+  colnames(wide)[ncol(wide)] <- paste0(Var,".cm")
+  cleanBP <- join(cleanBP,wide[,c("ID",paste0(Var,".cm"))],by="ID",type="left") # joining with long-form data
+  cleanBP[,paste0(Var,".mc")] <- cleanBP[,Var] - cleanBP[,paste0(Var,".cm")] } # computing mean-centered scores
+```
+
+<br>
+
+### 4.2.1. gender {.tabset .tabset-fade .tabset-pills}
+
+`gender` is a categorical variable with a roughly balanced number of participants. In section 3.5 we observed some tendency with higher `SBP_aft` in men than in women. Consistently, its inclusion in the null model shows improved evidence (i.e., higher Akaike weight) compared to the null model, although the estimated t-value is lower than 2, with a particularly low value for `DBP_eve`. In both cases, also considering its theoretical relevance as a potential moderator of the straining effects of workaholism (e.g., [Balducci et al. (2018; 2021)](#ref)) **we include `gender` as a covariate** for evening blood pressure.
+
+#### SBP_eve
+```{r }
+# number of cases by covariate level
+summary(cleanBP[!duplicated(cleanBP$ID),"gender"]) # No. participants
+summary(cleanBP$gender) # No. cases
+
+# model comparison
+m0 <- lmer(SBP_eve ~ (1|ID),data=cleanBP)
+m1 <- lmer(SBP_eve ~ gender + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1)) # Akaike weights: stronger evidence including gender
+summary(m1)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+#### DBP_eve
+```{r }
+# model comparison
+m0d <- lmer(DBP_eve ~ (1|ID),data=cleanBP)
+m1d <- lmer(DBP_eve ~ gender + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d)) # Akaike weights: stronger evidence including gender
+summary(m1d)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.2.2. age {.tabset .tabset-fade .tabset-pills}
+
+`age` is a level-2 continuous variable that in section 3.2 showed moderate-to-strong positive relationships with blood pressure (*r* from .42 to .52). Consistently, its inclusion in the model including `gender` implies stronger evidence than more parsimonious models, with an absolute t-value higher than 2. Thus, despite the uncertainty on its relationship with workaholism, we **include `age` as a covariate** for evening blood pressure.
+
+#### SBP_eve
+```{r }
+# model comparison vs null
+m1.bis <- lmer(SBP_eve ~ age + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison vs gender
+m2 <- lmer(SBP_eve ~ gender + age + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2)) # Akaike weights: stronger evidence than previous model
+summary(m2)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+#### DBP_eve
+```{r }
+# model comparison vs null
+m1.bisd <- lmer(DBP_eve ~ age + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bisd)$coefficients # coefficient: |t| > 2
+
+# model comparison vs gender
+m2d <- lmer(DBP_eve ~ gender + age + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d)) # Akaike weights: stronger evidence than previous model
+summary(m2d)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+### 4.2.3. BMI {.tabset .tabset-fade .tabset-pills}
+
+`BMI` is a level-2 continuous variable that in section 3.2 showed weak-to-moderate positive relationships with blood pressure (*r* from .28 to .43). Consistently, its inclusion in the model including `gender` and `age` implies stronger evidence than more parsimonious models, with an absolute t-value higher than 2. Thus, despite the uncertainty on its relationship with workaholism, we **include `BMI` as a covariate** for evening blood pressure.
+
+#### SBP_eve
+```{r }
+# model comparison vs null
+m1.bis <- lmer(SBP_eve ~ BMI + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison vs previous model
+m3 <- lmer(SBP_eve ~ gender + age + BMI + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3)) # Akaike weights: stronger evidence than previous model
+summary(m3)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+#### DBP_eve
+```{r }
+# model comparison vs null
+m1.bisd <- lmer(DBP_eve ~ BMI + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bisd)$coefficients # coefficient: |t| > 2
+
+# model comparison vs previous model
+m3d <- lmer(DBP_eve ~ gender + age + BMI + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d)) # Akaike weights: stronger evidence than previous model
+summary(m3d)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+### 4.2.4. smoker {.tabset .tabset-fade .tabset-pills}
+
+`smoker` is a level-2 categorical variable that in section 3.5 did not show substantially relationships with blood pressure. Consistently, both models show an absolute t-value lower than 2 when the other covariates are considered, although its inclusion implies stronger evidence than more parsimonious models. Also considering the uncertainty of its relationship with workaholism, we **do not include** it as a covariate for evening blood pressure.
+
+#### SBP_eve
+```{r }
+# model comparison vs null
+m1.bis <- lmer(SBP_eve ~ smoker + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4 <- lmer(SBP_eve ~ gender + age + BMI + smoker + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: stronger evidence than previous model
+summary(m4)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+#### DBP_eve
+```{r }
+# model comparison vs null
+m1.bisd <- lmer(DBP_eve ~ smoker + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bisd)$coefficients # coefficient: |t| > 2
+
+# model comparison vs previous model
+m4d <- lmer(DBP_eve ~ gender + age + BMI + smoker + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: stronger evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.2.5. WorkHours {.tabset .tabset-fade .tabset-pills}
+
+`workHours` is a level-1 continuous variable that in section 3.2 was not substantially correlated with evening blood pressure (*r* = .03-.06). Here, its inclusion implies weaker evidence (i.e., lower Akaike weight) than more parsimonious models, with an estimated absolute t-value lower than 2. Thus, also considering the theoretical importance of this variable, which might be a potential explanatory mechanism (e.g., mediator) through which workaholism might impact on blood pressure, **we do not include** it as a covariate for evening blood pressure.
+
+#### SBP_eve
+```{r }
+# model comparison vs null
+m1.bis <- lmer(SBP_eve ~ workHours.mc + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4 <- lmer(SBP_eve ~ gender + age + BMI + workHours.mc + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: weaker evidence than previous model
+summary(m4)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+#### DBP_eve
+```{r }
+# model comparison vs null
+m1.bisd <- lmer(DBP_eve ~ workHours.mc + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: weaker evidence than null model
+summary(m1.bisd)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4d <- lmer(DBP_eve ~ gender + age + BMI + workHours.mc + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: weaker evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.2.6. lateWorkHours {.tabset .tabset-fade .tabset-pills}
+
+`lateWorkHours` is a level-1 categorical variable that in section 3.5 only showed slight differences in evening systolic blood pressure. Consistently, its inclusion implies stronger evidence than more parsimonious models, with an absolute t-value higher than 2 for `SBP_eve`. However, we consider its role as a potential explanatory mechanism (e.g., mediator) through which workaholism might impact on blood pressure. Thus, also in light of the unbalanced number of cases, **we do not include** it as a covariate for evening blood pressure.
+
+#### SBP_eve
+```{r }
+# summary of cases
+summary(cleanBP$lateWorkHours)
+
+# model comparison vs null
+m1.bis <- lmer(SBP_eve ~ lateWorkHours + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison vs previous model
+m4 <- lmer(SBP_eve ~ gender + age + BMI + lateWorkHours + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: stronger evidence than previous model
+summary(m4)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+#### DBP_eve
+```{r }
+# model comparison vs null
+m1.bisd <- lmer(DBP_eve ~ lateWorkHours + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bisd)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4d <- lmer(DBP_eve ~ gender + age + BMI + lateWorkHours + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: stronger evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.2.7. dailyHassles_eve {.tabset .tabset-fade .tabset-pills}
+
+`dailyHassles_eve` is a level-1 categorical variable that in section 3.5 predicted slightly higher evening systolic blood pressure. Consistently, its inclusion implies stronger evidence (i.e., higher Akaike weight) than more parsimonious models, with an estimated absolute t-value higher than 2 for both systolic and diastolic evening blood pressure. However, the variable shows a strongly unbalanced number of cases, with only 10% of cases with some evening hassle. Moreover, we consider the theoretical importance of this variable, which might be a potential explanatory mechanism (e.g., mediator) through which workaholism might impact on strain. Thus, **we do not include** it as a covariate for evening blood pressure.
+
+#### SBP_eve
+```{r }
+# number of cases by covariate level
+summary(cleanBP$dailyHassles_eve)
+
+# model comparison vs null
+m1.bis <- lmer(SBP_eve ~ dailyHassles_eve + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison vs previous model
+m4 <- lmer(SBP_eve ~ gender + age + BMI + dailyHassles_eve + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: stronger evidence than previous model
+summary(m4)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+#### DBP_eve
+```{r }
+# model comparison vs null
+m1.bisd <- lmer(DBP_eve ~ dailyHassles_eve + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bisd)$coefficients # coefficient: |t| > 2
+
+# model comparison vs previous model
+m4d <- lmer(DBP_eve ~ gender + age + BMI + dailyHassles_eve + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: stronger evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+### 4.2.8. teleWork {.tabset .tabset-fade .tabset-pills}
+
+`teleWork` is a level-1 categorical variable that in section 3.5 only showed some slight difference in evening blood pressure. Here, although its inclusion implies stronger evidence than more parsimonious models, absolute t-values are lower than 2. Thus, also considering the unbalanced number of cases per level and the uncertainty of its relationship with both workaholism and blood pressure, **we do not include** it as a covariate for evening blood pressure.
+
+#### SBP_eve
+```{r }
+# number of cases by covariate level
+summary(cleanBP$teleWork) # currently 4 categories
+cleanBP$teleWork <- as.factor(gsub("both","teleWork",gsub("dayOff","teleWork",cleanBP$teleWork))) # recoding to 2 categories
+summary(cleanBP$teleWork)
+
+# model comparison vs null
+m1.bis <- lmer(SBP_eve ~ teleWork + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4 <- lmer(SBP_eve ~ gender + age + BMI + teleWork + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: stronger evidence than previous model
+summary(m4)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+#### DBP_eve
+```{r }
+# model comparison vs null
+m1.bisd <- lmer(DBP_eve ~ teleWork + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bisd)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4d <- lmer(DBP_eve ~ gender + age + BMI + teleWork + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: stronger evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.2.9. confounders_eve {.tabset .tabset-fade .tabset-pills}
+
+`confounders_eve` is a level-1 categorical variable that in section 3.5 showed some slight difference in afternoon blood pressure. Here, although its inclusion implies weaker evidence than more parsimonious models, absolute t-values are lower than 2. Thus, also considering the unbalanced number of cases per level and the uncertainty of its relationship with workaholism, **we do not include** it as a covariate for evening blood pressure.
+
+#### SBP_eve
+```{r }
+# number of cases by covariate level
+summary(cleanBP$confounders_eve)
+
+# model comparison vs null
+m1.bis <- lmer(SBP_eve ~ confounders_eve + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4 <- lmer(SBP_eve ~ gender + age + BMI + confounders_eve + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: stronger evidence than previous model
+summary(m4)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+#### DBP_eve
+```{r }
+# model comparison vs null
+m1.bisd <- lmer(DBP_eve ~ confounders_eve + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bisd)$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4d <- lmer(DBP_eve ~ gender + age + BMI + confounders_eve + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: stronger evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+### 4.2.10. Other covariates {.tabset .tabset-fade .tabset-pills}
+
+In addition to the pre-registered covariates, we consider a **further level-2 covariate** that in section 3.5 showed substantial trends in both evening blood pressure and workaholism, and whose potential influence on both variables can be theoretically argued, namely having **children** `children` or living with children `home_child`. Indeed, respondents reporting to live with their children reported higher evening blood pressure, whereas those reporting to have children reported slightly lower workaholism (see section 3.5). Theoretically, it is plausible although not consistently reported by previous research (see [Clark et al., 2016](#ref)) that workaholism levels and overall investment in the work vs. family domain are influenced by family needs and presence of children in the household. On the other hand, family needs and living with children might negatively impact on blood pressure. Thus, both `children` and `home_child` might be a common external variable influencing both workaholism and evening, and we consider it as a further potential covariate.
+
+Although both `children` and `home_child` have an acceptably balanced number of cases per level and both imply stronger evidence than more parsimonious models, none of them show an absolute *t* value higher than 2. Thus, also in this case, **we do not include** these two variables as covariates for evening blood pressure.
+
+#### SBP_eve
+```{r }
+# number of cases by covariate level
+summary(cleanBP[!duplicated(cleanBP$ID),"children"]) # children: No. participants
+summary(cleanBP$children) # children: No. cases
+summary(cleanBP[!duplicated(cleanBP$ID),"home_child"]) # home_child: No. participants
+summary(cleanBP$home_child) # home_child: No. cases
+
+# model comparison children vs null
+m1.bis <- lmer(SBP_eve ~ children + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison home_child vs null
+m1.bis <- lmer(SBP_eve ~ home_child + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison children vs previous model
+m4 <- lmer(SBP_eve ~ gender + age + BMI + children + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: stronger evidence than previous model
+summary(m4)$coefficients # coefficient: |t| < 2
+
+# model comparison home_child vs previous model
+m4 <- lmer(SBP_eve ~ gender + age + BMI + home_child + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: stronger evidence than previous model
+summary(m4)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+#### DBP_eve
+```{r }
+# model comparison children vs null
+m1.bisd <- lmer(DBP_eve ~ children + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bisd)$coefficients # coefficient: |t| < 2
+
+# model comparison home_child vs null
+m1.bisd <- lmer(DBP_eve ~ home_child + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bisd)$coefficients # coefficient: |t| < 2
+
+# model comparison children vs previous model
+m4d <- lmer(DBP_eve ~ gender + age + BMI + children + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: stronger evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| < 2
+
+# model comparison home_child vs previous model
+m4d <- lmer(DBP_eve ~ gender + age + BMI + home_child + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: stronger evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.2.11. Time trends {.tabset .tabset-fade .tabset-pills}
+
+As a final, not pre-registered, control, we inspect the **linear time trends** of the outcome variable. This is done by including the number of `day`s since the beginning of the study as a further covariate. We can see that the inclusion of `day` implies stronger evidence than more parsimonious models, with an absolute *t* value higher than 2. However, a better inspection of blood pressure distributions through `day` levels shows that such effect is likely due to measurement reactivity (i.e., increased physiological activation during the first - less familiar - blood pressure recordings). Consistently the linear time trend is no longer substantial after the removal of observations collected on the first day, whereas the effect is larger when `day` is included as a categorical variable with day 1 vs. other days. Thus, we **do not include** `day` as a covariate** for evening blood pressure, but we will consider it as a robustness check.
+
+#### SBP_eve
+```{r }
+# plotting SBP_eve by day
+boxplot(SBP_eve ~ day,data=cleanBP)
+
+# model comparison vs null
+m1.bis <- lmer(SBP_eve ~ day + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# removing day 1
+Weights(AIC(update(m0,data=cleanBP[cleanBP$day!=1,]),update(m1.bis,data=cleanBP[cleanBP$day!=1,]))) # weaker evidence than null
+summary(update(m1.bis,data=cleanBP[cleanBP$day!=1,]))$coefficients # coefficient: |t| < 2
+
+# model comparison vs previous model
+m4 <- lmer(SBP_eve ~ gender + age + BMI + day + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: stronger evidence than previous model
+summary(m4)$coefficients # coefficient: |t| > 2
+
+# removing day 1
+Weights(AIC(update(m0,data=cleanBP[cleanBP$day!=1,]),update(m1,data=cleanBP[cleanBP$day!=1,]),
+            update(m2,data=cleanBP[cleanBP$day!=1,]),update(m3,data=cleanBP[cleanBP$day!=1,]),
+            update(m4,data=cleanBP[cleanBP$day!=1,]))) # weaker evidence than null
+summary(update(m4,data=cleanBP[cleanBP$day!=1,]))$coefficients # coefficient: |t| < 2
+
+# isolating day 1 as a factor
+cleanBP$day1 <- 0
+cleanBP[cleanBP$day==1,"day1"] <- 1
+cleanBP$day1 <- as.factor(cleanBP$day1)
+summary(cleanBP$day1) # number of cases
+boxplot(SBP_eve ~ day1,data=cleanBP) # plotting SBP by day
+
+# model comparison considering day1 vs previous model
+m4 <- lmer(SBP_eve ~ gender + age + BMI + day1 + (1|ID),data=cleanBP)
+Weights(AIC(m0,m1,m2,m3,m4)) # Akaike weights: stronger evidence than previous model
+summary(m4)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+#### DBP_eve
+```{r }
+# plotting DBP_eve by day
+boxplot(DBP_eve ~ day,data=cleanBP)
+
+# model comparison vs null
+m1.bisd <- lmer(DBP_eve ~ day + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1.bisd)) # Akaike weights: stronger evidence than null model
+summary(m1.bisd)$coefficients # coefficient: |t| > 2
+
+# model comparison vs previous model
+m4d <- lmer(DBP_eve ~ gender + age + BMI + day + (1|ID),data=cleanBP)
+Weights(AIC(m0d,m1d,m2d,m3d,m4d)) # Akaike weights: stronger evidence than previous model
+summary(m4d)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+## 4.3. Emotional Exhaustion
+
+For emotional exhaustion, the pre-registered potential covariates to be considered are: 
+
+1. `gender`, as previous evidence highlighted higher emotional exhaustion in women compared to men (e.g., [Purvanova et al 2010](#ref)) and gender has been highlighted as a potential moderator of the straining effects of trait workaholism (e.g., [Bladucci et al., 2018; 2021](#ref)).
+
+2. `age`, as previous evidence highlighted some emotional exhaustion trend over age (e.g., [Brewer et al., 2004](#ref)); however, no clear differences have been highlighted for workaholism over age ([Clark et al., 2016](#ref)).
+
+3. The daily number of worked hours `workHours`, as long working hours is a definitional aspect of workaholism which has been found associated with emotional exhaustion ([Seidler et al, 2014](#ref)); however, controlling for this variable might risk to artificially deflate the relationship between workaholism and sleep disturbances since the former might influence the latter through working hours. That is, working hours is a **potential explanatory mechanism** of the focused relationship, and including it as a control variable might bias rather than strengthening the results (see [Spector et al., 2021](#ref)).
+
+5. The occurrence of late working hours in the evening `lateWorkHours`, consistently with what argued above for `workHours`; also in this case, controlling for this variable might risk to rule out a **potential explanatory mechanism** of the relationship between workaholism and sleep disturbances.
+
+7. Nonwork hassles in the evening `dailyHassles_eve`, as private life hassles have been related to emotional exhaustion (e.g., [Klusmann et al., 2021](#ref)) and nonwork hassles such as relationship tension have been recently related to state workaholism ([Clark et al., 2021](#ref)); also in this case, such an argument imply that nonwork hassles are a **potential explanatory mechanism** of the focused relationship.
+
+8. Remote work `teleWork`, as emotional exhaustion might be different during remote work days (e.g., [Abdel Hadi et al., 2021](#ref)), although with no clear expectations on its relationship with workaholism.
+
+Further pre-registered level-2 covariates (i.e., retrospective measures of trait workaholism, technostress creators) are not included due to our aim to focus the study on the focused level-1 variables, whereas recovery experiences will be included in all models (see [Supplementary material S7](https://osf.io/bprvg)). Blood pressure confounders are not considered as well, due to the lack of clear link with exhaustion and workaholism. In contrast, additional (i.e., not pre-registered) level-2 covariates potentially moderating the relationship between workaholism and emotional exhaustion are considered as potentially confounding factors.
+
+Prior to evaluate the inclusion of each covariate, we prepare the data for the analyses. That is, we remove cases of missing responses in the response variable or any covariate (**list-wise deletion**) and we center level-1 continuous covariates on the individual mean (**person-mean-centering**).
+```{r }
+# list-wise deletion culo
+cleanEE <- as.data.frame(na.omit(clean[,c("ID","day","EE","gender","age","workHours","lateWorkHours",
+                                          "dailyHassles_eve","teleWork","home_child","children")]))
+cat("Considering",nrow(cleanEE),"complete observations from",nlevels(as.factor(as.character(cleanEE$ID))),"participants")
+
+# mean centering lv-1 continuous covariates
+for(Var in c("workHours")){
+  prelqs <- cbind(prelqs,aggregate(cleanEE[,Var],list(cleanEE$ID),mean)[,2]) # computing individual means
+  colnames(prelqs)[ncol(prelqs)] <- paste0(Var,".cm")
+  cleanEE <- join(cleanEE,prelqs[,c("ID",paste0(Var,".cm"))],by="ID",type="left") # joining with long-form data
+  cleanEE[,paste0(Var,".mc")] <- cleanEE[,Var] - cleanEE[,paste0(Var,".cm")] } # computing mean-centered scores
+```
+
+<br>
+
+### 4.3.1. gender
+
+`gender` is a categorical variable with a roughly balanced number of participants. In section 3.5 we did not observed substantial gender differences in emotional exhaustion. Consistently, its inclusion in the null model shows weaker evidence (i.e., lower Akaike weight), with an estimated t-value lower than 2. However, considering its theoretical relevance as a potential moderator of the straining effects of workaholism (e.g., [Balducci et al. (2018)](#ref)) **we include `gender` as a covariate** for sleep disturbances.
+```{r }
+# number of cases by covariate level
+summary(cleanEE[!duplicated(cleanEE$ID),"gender"]) # No. participants
+summary(cleanEE$gender) # No. cases
+
+# model comparison
+m0 <- lmer(EE ~ (1|ID),data=cleanEE)
+m1 <- lmer(EE ~ gender + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1)) # Akaike weights: weaker evidence including gender
+summary(m1)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.3.2. age
+
+`age` is a level-2 continuous variable that in section 3.2 was uncorrelated with emotional exhaustion (*r* = 0.00). Consistently, its inclusion in the model including `gender` implies weaker evidence than more parsimonious models, with an absolute t-value lower than 2. Thus, also considering the uncertainty on its relationship with workaholism, **we do not include** it as a covariate for emotional exhaustion.
+```{r }
+# model comparison vs null
+m1.bis <- lmer(EE ~ age + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1.bis)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs gender
+m2 <- lmer(EE ~ gender + age + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1,m2)) # Akaike weights: weaker evidence than previous model
+summary(m2)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.3.3. workHours
+
+`workHours` is a level-1 continuous variable that in section 3.2 was positively correlated with emotional exhaustion (*r* = 0.22). Consistently, its inclusion implies stronger evidence than more parsimonious models, with an absolute t-value higher than 2. However, considering its role as a potential explanatory mechanism (e.g., mediator) through which workaholism might impact on strain, **we do not include** it as a covariate for emotional exhaustion.
+```{r }
+# model comparison vs null
+m1.bis <- lmer(EE ~ workHours.mc + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison vs gender
+m2 <- lmer(EE ~ gender + workHours.mc + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1,m2)) # Akaike weights: stronger evidence than previous model
+summary(m2)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+### 4.3.4. lateWorkHours
+
+`lateWorkHours` is a level-1 categorical variable that in section 3.5 did not predict substantial differences in emotional exhaustion. Consistently, its inclusion implies weaker evidence than more parsimonious models, with an absolute t-value lower than 2. Thus, also considering its role as a potential explanatory mechanism (e.g., mediator) through which workaholism might impact on strain, **we do not include** it as a covariate for emotional exhaustion.
+```{r }
+# number of cases by covariate level
+summary(cleanEE$lateWorkHours)
+
+# model comparison vs null
+m1.bis <- lmer(EE ~ lateWorkHours + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1.bis)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs gender
+m2 <- lmer(EE ~ gender + lateWorkHours + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1,m2)) # Akaike weights: weaker evidence than previous model
+summary(m2)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.3.5. dailyHassles_eve
+
+`dailyHassles_eve` is a level-1 categorical variable that in section 3.5 predicted higher emotional exhaustion. Consistently, its inclusion implies stronger evidence (i.e., higher Akaike weight) than more parsimonious models, with an estimated absolute t-value higher than 2. However, the variable shows a strongly unbalanced number of cases, with only 10% of cases with some evening hassles. Moreover, we consider the theoretical importance of this variable, which might be a potential explanatory mechanism (e.g., mediator) through which workaholism might impact on strain. Thus, **we do not include** it as a covariate for emotional exhaustion.
+```{r }
+# number of cases by covariate level
+summary(cleanEE$dailyHassles_eve)
+
+# model comparison dailyHassles_eve vs null
+m1.bis <- lmer(EE ~ dailyHassles_eve + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison vs gender
+m2 <- lmer(EE ~ gender + dailyHassles_eve + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1,m2)) # Akaike weights: weaker evidence than previous model
+summary(m2)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+### 4.3.6. teleWork
+
+`teleWork` is a level-1 categorical variable that in section 3.5 did not predict substantial differences in emotional exhaustion. Consistently, its inclusion implies weaker evidence than more parsimonious models, with an absolute t-value lower than 2. Thus, also considering the unbalanced number of cases per level and the uncertainty of its relationship with workaholism, **we do not include** it as a covariate for emotional exhaustion.
+```{r }
+# number of cases by covariate level
+summary(cleanEE$teleWork) # currently 4 categories
+cleanEE$teleWork <- as.factor(gsub("both","teleWork",gsub("dayOff","teleWork",cleanEE$teleWork))) # recoding to 2 categories
+summary(cleanEE$teleWork)
+
+# model comparison vs null
+m1.bis <- lmer(EE ~ teleWork + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1.bis)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs gender + dailyHassles_eve
+m2 <- lmer(EE ~ gender + teleWork + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1,m2)) # Akaike weights: weaker evidence than previous model
+summary(m2)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.3.7. Other covariates
+
+In addition to the pre-registered covariates, we consider a **further level-2 covariate** that in section 3.5 showed substantial trends in both emotional exhaustion and workaholism, and whose potential influence on both variables can be theoretically argued, namely having `children` or living with children `home_child`. Indeed, respondents reporting to live with their children showed lower emotional exhaustion, whereas those reporting to have children reported slightly lower workaholism (see section 3.5). Theoretically, it is plausible although not consistently reported by previous research (see [Clark et al., 2016](#ref)) that workaholism levels and overall investment in the work vs. family domain are influenced by family needs and presence of children in the household. Thus, both `children` and `home_child` might be a common external variable influencing both workaholism and emotional exhaustion, and we consider it as a further potential covariate.
+
+Although both `children` and `home_child` have an acceptably balanced number of cases per level, none of them implied stronger evidence than the more parsimonious models. Thus, also in this case, **we do not include** these two variables as covariates for emotional exhaustion.
+```{r }
+# children...........................................................
+
+# number of cases by covariate level
+summary(cleanEE[!duplicated(cleanEE$ID),"children"]) # children: No. participants
+summary(cleanEE$children) # children: No. cases
+
+# model comparison home_child vs null
+m1.bis <- lmer(EE ~ home_child + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1.bis)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison children vs gender
+m2 <- lmer(EE ~ gender + children + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1,m2)) # Akaike weights: weaker evidence than previous model
+summary(m2)$coefficients # coefficient: |t| < 2
+
+# home_child...........................................................
+
+summary(cleanEE[!duplicated(cleanEE$ID),"home_child"]) # home_child: No. participants
+summary(cleanEE$home_child) # home_child: No. cases
+
+# model comparison children vs null
+m1.bis <- lmer(EE ~ children + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1.bis)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison home_child vs gender
+m2 <- lmer(EE ~ gender + home_child + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1,m2)) # Akaike weights: weaker evidence than previous model
+summary(m2)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.3.8. Time trends
+
+As a final, not pre-registered, control, we inspect the **linear time trends** of the outcome variable. This is done by including the number of `day`s since the beginning of the study as a further covariate. We can see that the inclusion of `day` implies stronger evidence than the null model unless the model only including `gender` is considered, with a t-value higher than 2. However, we cannot see a clear linear trend of `EE` over time. Thus, we **do not include** `day` as a covariate for emotional exhaustion, but we will consider it as a robustness check.
+```{r }
+# plotting SD by day
+boxplot(EE ~ day,data=cleanEE)
+
+# model comparison day vs null
+m1.bis <- lmer(EE ~ day + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison day vs gender + dailyHassles_eve
+m2 <- lmer(EE ~ gender + day + (1|ID),data=cleanEE)
+Weights(AIC(m0,m1,m2)) # Akaike weights: same evidence than previous models
+summary(m2)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+## 4.4. Sleep disturbances
+
+For sleep disturbances, the pre-registered potential covariates to be considered are: 
+
+1. `gender`, as previous evidence highlighted poorer sleep quality in women compared to men (e.g., [Zeng et al., 2022](#ref)) and gender has been highlighted as a potential moderator of the straining effects of trait workaholism (e.g., [Bladucci et al., 2018; 2021](#ref)).
+
+2. `age`, as previous evidence highlighted poorer sleep quality in aging (e.g., [Floyd et al., 2000](#ref)); however, no clear differences have been highlighted for workaholism over age ([Clark et al., 2016](#ref)).
+
+3. The time since waking up `hhFromAwake`, as perceived sleep disturbances might change with the time between awakening and the subsequent survey response; however, we have no clear expectation on its relationship with workaholism, and the two variables are uncorrelated (*r* = 0.02).
+
+4. The daily number of worked hours `workHours`, as long working hours is a definitional aspect of workaholism which has been found associated with sleep disturbances ([Virtanen, 2009](#ref)); however, controlling for this variable might risk to artificially deflate the relationship between workaholism and sleep disturbances since the former might influence the latter through working hours. That is, working hours is a **potential explanatory mechanism** of the focused relationship, and including it as a control variable might bias rather than strengthening the results (see [Spector et al., 2021](#ref)).
+
+5. The occurrence of late working hours in the evening `lateWorkHours`, consistently with what argued above for `workHours`; also in this case, controlling for this variable might risk to rule out a **potential explanatory mechanism** of the relationship between workaholism and sleep disturbances
+
+7. Nonwork hassles in the evening `dailyHassles_eve`, as hassles have been related to sleep disturbances (e.g., [Dahl et al., 2007](#ref)) and nonwork hassles such as relationship tension have been recently related to state workaholism ([Clark et al., 2021](#ref)); also in this case, such an argument imply that nonwork hassles are a **potential explanatory mechanism** of the focused relationship.
+
+8. Remote work `teleWork`, although with no clear expectations on its relationship with sleep disturbances, while we originally hypothesized that remote working might act as a moderator of the straining effect of workaholism.
+
+Further pre-registered level-2 covariates (i.e., retrospective measures of trait workaholism, technostress creators) are not included due to our aim to focus the study on the focused level-1 variables, whereas recovery experiences will be included in all models (see [Supplementary material S7](https://osf.io/bprvg)). In contrast, additional (i.e., not pre-registered) level-2 covariates potentially moderating the relationship between workaholism and sleep disturbances are considered as potentially confounding factors.
+
+Prior to evaluate the inclusion of each covariate, we prepare the data for the analyses. That is, we remove cases of missing responses in the response variable or any covariate (**list-wise deletion**) and we center level-1 continuous covariates on the individual mean (**person-mean-centering**).
+```{r }
+# list-wise deletion
+cleanSD <- as.data.frame(na.omit(clean[,c("ID","day","SD",
+                                        "gender","age","workHours","hhFromAwake","lateWorkHours",
+                                        "dailyHassles_eve","teleWork",
+                                        "home_child","children")]))
+cat("Considering",nrow(cleanSD),"complete observations from",nlevels(as.factor(as.character(cleanSD$ID))),"participants")
+
+# mean centering lv-1 continuous covariates
+for(Var in c("hhFromAwake","workHours")){
+  prelqs <- cbind(prelqs,aggregate(cleanSD[,Var],list(cleanSD$ID),mean)[,2]) # computing individual means
+  colnames(prelqs)[ncol(prelqs)] <- paste0(Var,".cm")
+  cleanSD <- join(cleanSD,prelqs[,c("ID",paste0(Var,".cm"))],by="ID",type="left") # joining with long-form data
+  cleanSD[,paste0(Var,".mc")] <- cleanSD[,Var] - cleanSD[,paste0(Var,".cm")] } # computing mean-centered scores
+```
+
+<br>
+
+### 4.4.1. gender
+
+`gender` is a categorical variable with a roughly balanced number of participants. Although in section 3.5 we only observed some slight tendency, its inclusion in the null model shows improved evidence (i.e., higher Akaike weight) compared to the null model, with an estimated t-value close to 2. Thus, also considering its theoretical relevance as a potential moderator of the straining effects of workaholism (e.g., [Balducci et al. (2018)](#ref)) **we include `gender` as a covariate** for sleep disturbances.
+```{r }
+# number of cases by covariate level
+summary(cleanSD[!duplicated(cleanSD$ID),"gender"]) # No. participants
+summary(cleanSD$gender) # No. cases
+
+# model comparison
+m0 <- lmer(SD ~ (1|ID),data=cleanSD)
+m1 <- lmer(SD ~ gender + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1)) # Akaike weights: stronger evidence including gender
+summary(m1)$coefficients # coefficient: proximal to |t|=2
+```
+
+<br>
+
+### 4.4.2. age
+
+`age` is a level-2 continuous variable that in section 3.2 was unrelated with sleep disturbances (*r* = 0.02). Consistently, its inclusion in the model including `gender` implies weaker evidence than more parsimonious models, with an absolute t-value lower than 2. Thus, also considering the uncertainty on its relationship with workaholism, **we do not include** it as a covariate for sleep disturbances.
+```{r }
+# model comparison vs null
+m1.bis <- lmer(SD ~ age + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1.bis)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs gender
+m2 <- lmer(SD ~ gender + age + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1,m2)) # Akaike weights: weaker evidence than previous model
+summary(m2)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.4.3. hhFromAwake
+
+`hhFromAwake` is a level-1 continuous variable that in section 3.2 was unrelated to sleep disturbances (*r* = 0.02). Consistently, its inclusion implies weaker evidence than more parsimonious models, with an absolute t-value lower than 2. Thus, also considering the uncertainty of its relationship with both workaholism and sleep disturbances, **we do not include** it as a covariate for sleep disturbances.
+```{r }
+# model comparison vs null
+m1.bis <- lmer(SD ~ hhFromAwake.mc + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1.bis)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs gender
+m2 <- lmer(SD ~ gender + hhFromAwake.mc + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1,m2)) # Akaike weights: weaker evidence than previous model
+summary(m2)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.4.4. workHours
+
+`workHours` is a level-1 continuous variable that in section 3.2 was uncorrelated with sleep disturbances (*r* = 0.02). Consistently, its inclusion implies weaker evidence than more parsimonious models, with an absolute t-value lower than 2. Thus, also considering its role as a potential explanatory mechanism (e.g., mediator) through which workaholism might impact on strain, **we do not include** it as a covariate for sleep disturbances.
+```{r }
+# model comparison vs null
+m1.bis <- lmer(SD ~ workHours.mc + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1.bis)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs gender
+m2 <- lmer(SD ~ gender + workHours.mc + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1,m2)) # Akaike weights: weaker evidence than previous model
+summary(m2)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.4.5. lateWorkHours
+
+`lateWorkHours` is a level-1 categorical variable that in section 3.5 did not predict substantial differences in sleep disturbances. Consistently, its inclusion implies weaker evidence than more parsimonious models, with an absolute t-value lower than 2. Thus, also considering its role as a potential explanatory mechanism (e.g., mediator) through which workaholism might impact on strain, **we do not include** it as a covariate for sleep disturbances.
+```{r }
+# number of cases by covariate level
+summary(cleanSD$lateWorkHours)
+
+# model comparison vs null
+m1.bis <- lmer(SD ~ lateWorkHours + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1.bis)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs gender
+m2 <- lmer(SD ~ gender + lateWorkHours + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1,m2)) # Akaike weights: weaker evidence than previous model
+summary(m2)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.4.6. dailyHassles_eve
+
+`dailyHassles_eve` is a level-1 categorical variable that in section 3.5 predicted slightly higher sleep disturbances. Consistently, its inclusion implies stronger evidence (i.e., higher Akaike weight) than more parsimonious models, with an estimated absolute t-value higher than 2. However, the variable shows a strongly unbalanced number of cases, with only 10% of cases with some evening hassle. Moreover, we consider the theoretical importance of this variable, which might be a potential explanatory mechanism (e.g., mediator) through which workaholism might impact on strain. Thus, **we do not include** it as a covariate for sleep disturbances.
+```{r }
+# number of cases by covariate level
+summary(cleanSD$dailyHassles_eve)
+
+# model comparison dailyHassles_eve vs null
+m1.bis <- lmer(SD ~ dailyHassles_eve + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1.bis)) # Akaike weights: stronger evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison vs gender
+m2 <- lmer(SD ~ gender + dailyHassles_eve + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1,m2)) # Akaike weights: weaker evidence than previous model
+summary(m2)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+### 4.4.7. teleWork
+
+`teleWork` is a level-1 categorical variable that in section 3.5 did not predict substantial differences in sleep disturbances. Consistently, its inclusion implies weaker evidence than more parsimonious models, with an absolute t-value lower than 2. Thus, also considering the unbalanced number of cases per level and the uncertainty of its relationship with both workaholism and sleep disturbances, **we do not include** it as a covariate for sleep disturbances.
+```{r }
+# number of cases by covariate level
+summary(cleanSD$teleWork) # currently 4 categories
+cleanSD$teleWork <- as.factor(gsub("both","teleWork",gsub("dayOff","teleWork",cleanSD$teleWork))) # recoding to 2 categories
+summary(cleanSD$teleWork)
+
+# model comparison vs null
+m1.bis <- lmer(SD ~ teleWork + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1.bis)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison vs gender + dailyHassles_eve
+m2 <- lmer(SD ~ gender + teleWork + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1,m2)) # Akaike weights: weaker evidence than previous model
+summary(m2)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.4.8. Other covariates
+
+In addition to the pre-registered covariates, we consider a **further level-2 covariate** that in section 3.5 showed substantial trends in both sleep disturbances and workaholism, and whose potential influence on both variables can be theoretically argued, namely having **children** `children` or living with children `home_child`. Indeed, respondents reporting to live with their children reported slightly higher sleep disturbances, whereas those reporting to have children reported slightly lower workaholism (see section 3.5). Theoretically, it is plausible although not consistently reported by previous research (see [Clark et al., 2016](#ref)) that workaholism levels and overall investment in the work vs. family domain are influenced by family needs and presence of children in the household. On the other hand, family needs and living with children have been shown to negatively impact on sleep disturbances (e.g., [Gay et al., 20040](#ref)). Thus, both `children` and `home_child` might be a common external variable influencing both workaholism and sleep disturbances, and we consider it as a further potential covariate.
+
+Although both `children` and `home_child` have an acceptably balanced number of cases per level, none of them implies stronger evidence than the more parsimonious models. Thus, also in this case, **we do not include** these two variables as covariates for sleep disturbances.
+```{r }
+# children.....................................................
+
+# number of cases by covariate level
+summary(cleanSD[!duplicated(cleanSD$ID),"children"]) # children: No. participants
+summary(cleanSD$children) # children: No. cases
+
+# model comparison children vs null
+m1.bis <- lmer(SD ~ children + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1.bis)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# model comparison home_child vs null
+m1.bis <- lmer(SD ~ home_child + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1.bis)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| < 2
+
+# home_child.....................................................
+
+summary(cleanSD[!duplicated(cleanSD$ID),"home_child"]) # home_child: No. participants
+summary(cleanSD$home_child) # home_child: No. cases
+
+# model comparison home_child vs gender
+m2 <- lmer(SD ~ gender + home_child + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1,m2)) # Akaike weights: weaker evidence than previous model
+summary(m2)$coefficients # coefficient: |t| < 2
+
+# model comparison children vs gender
+m2 <- lmer(SD ~ gender + children + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1,m2)) # Akaike weights: weaker evidence than previous model
+summary(m2)$coefficients # coefficient: |t| < 2
+```
+
+<br>
+
+### 4.4.9. Time trends
+
+As a final, not pre-registered, control, we inspect the **linear time trends** of the outcome variable. This is done by including the number of `day`s since the beginning of the study as a further covariate. We can see that the inclusion of `day` does not imply stronger evidence than more parsimonious models, although a negative time trend (|*t*| > 2) is estimated for sleep disturbances. Thus, we chose to **not include** `day` as a covariate for sleep disturbances.
+```{r }
+# plotting SD by day
+boxplot(SD ~ day,data=cleanSD)
+
+# model comparison day vs null
+m1.bis <- lmer(SD ~ day + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1.bis)) # Akaike weights: weaker evidence than null model
+summary(m1.bis)$coefficients # coefficient: |t| > 2
+
+# model comparison day vs gender + dailyHassles_eve
+m2 <- lmer(SD ~ gender + day + (1|ID),data=cleanSD)
+Weights(AIC(m0,m1,m2)) # Akaike weights: weaker evidence than previous models
+summary(m2)$coefficients # coefficient: |t| > 2
+```
+
+<br>
+
+## 4.5. Summary of results
+
+Here, we summarize the results of our covariate selection procedure:
+
+- for `SBP_aft` and `DBP_aft`, we selected `gender`, `age`, and `BMI` as covariates;
+
+- for `SBP_eve` and `DBP_eve`, we selected `gender`, `age`, and `BMI` as covariates;
+
+- for `EE`, we selected `gender` as a covariate;
+
+- for `SD`, we selected `gender` as a covariate. 
+
+<br>
+
+# 5. Data export
+
+Here, we export the formulas of the models including the covariates selected for each response variable (see section 4).
+```{r }
+# specifying model formulas
+mformulas <- c("SBP_aft ~ gender + age + BMI",
+               "DBP_aft ~ gender + age + BMI",
+               
+               "SBP_eve ~ gender + age + BMI",
+               "DBP_eve ~ gender + age + BMI",
+               
+               "EE ~ gender",
+               
+               "SD ~ gender")
+
+# exporting model formula
+save(mformulas,file="DATI/mformulas.RData")
+```
+
+<br>
+
+# 6. Outputs
+
+Finally, we generate and export the outputs to be included in the manuscript, namely the table with the descriptive statistics and correlations that only includes the focused variables and the selected covariates.
+```{r warning=FALSE,message=FALSE}
+# selecting level-1 quantitative variables
+lv1 <- c("WHLSM","SBP_aft","DBP_aft", # afternoon
+         "SBP_eve","DBP_eve","EE","PD", # evening
+         "SD") # next morning
+lv2 <- c("age","BMI")
+
+# computing descriptives
+tab1 <- cbind(multidesc(long=clean,wide=prelqs,lv1=lv1,lv2=lv2),
+              multicorr(long=clean,wide=prelqs,lv1=lv1,lv2=lv2,pvalue=TRUE,correction="BH"))
+write.csv(tab1,"RESULTS/Table1.csv",row.names=FALSE)
+kable(tab1)
+```
+
+<br>
+
+# References {#ref}
+
+- Abdel Hadi, S., Bakker, A. B., & Häusser, J. A. (2021). The role of leisure crafting for emotional exhaustion in telework during the COVID-19 pandemic. *Anxiety, Stress, & Coping, 34*(5), 530-544. https://doi.org/10.1080/10615806.2021.1903447
+
+- Balducci, C., Avanzi, L., & Fraccaroli, F. (2018). The Individual “Costs” of Workaholism: An Analysis Based on Multisource and Prospective Data. *Journal of Management, 44*(7), 2961–2986. https://doi.org/10.1177/0149206316658348
+
+- Brewer, E. W., & Shapard, L. (2004). Employee burnout: A meta-analysis of the relationship between age or years of experience. *Human resource development review, 3*(2), 102-123. https://doi.org/10.1177/1534484304263335
+
+- Clark, M. A., Hunter, E. M., & Carlson, D. S. (2021). Hidden costs of anticipated workload for individuals and partners: Exploring the role of daily fluctuations in workaholism. *Journal of Occupational Health Psychology, 26*(5), 393–404. https://doi.org/10.1037/ocp0000284
+
+- Clark, M. A., Michel, J. S., Zhdanova, L., Pui, S. Y., & Baltes, B. B. (2016). All Work and No Play? A Meta-Analytic Examination of the Correlates and Outcomes of Workaholism. *Journal of Management, 42*(7), 1836–1873. https://doi.org/10.1177/0149206314522301
+
+- Dahl, R. E., & El-Sheikh, M. (2007). Considering sleep in a family context: introduction to the special issue. *Journal of Family Psychology, 21*(1), 1. https://psycnet.apa.org/doi/10.1037/0893-3200.21.1.1
+
+- Floyd, J. A., Medler, S. M., Ager, J. W., & Janisse, J. J. (2000). Age‐related changes in initiation and maintenance of sleep: a meta‐analysis. *Research in nursing & health, 23*(2), 106-117. https://doi.org/10.1002/(SICI)1098-240X(200004)23:2%3C106::AID-NUR3%3E3.0.CO;2-A
+
+- Gay, C. L., Lee, K. A., & Lee, S. Y. (2004). Sleep patterns and fatigue in new mothers and fathers. *Biological research for nursing, 5*(4), 311-318. https://doi.org/10.1177/1099800403262142
+
+- Gregg, E. W., Cheng, Y. J., Cadwell, B. L., Imperatore, G., Williams, D. E., Flegal, K. M., ... & Williamson, D. F. (2005). Secular trends in cardiovascular disease risk factors according to body mass index in US adults. *Jama, 293*(15), 1868-1874. https://doi.org/10.1001/jama.293.15.1868
+
+- Klusmann, U., Aldrup, K., Schmidt, J., & Lüdtke, O. (2021). Is emotional exhaustion only the result of work experiences? A diary study on daily hassles and uplifts in different life domains. *Anxiety, Stress, & Coping, 34*(2), 173-190.
+
+- Landsbergis, P. A., Dobson, M., Koutsouras, G., & Schnall, P. (2013). Job strain and ambulatory blood pressure: a meta-analysis and systematic review. *American journal of public health, 103*(3), e61-e71. https://doi.org/10.2105/AJPH.2012.301153
+
+- McQuillan, M. E., Bates, J. E., Staples, A. D., & Deater-Deckard, K. (2022). A 1-year longitudinal study of the stress, sleep, and parenting of mothers of toddlers. *Sleep Health, 8*(1), 47-53. https://doi.org/10.1016/j.sleh.2021.08.006
+
+- Nyklíček, I., Vingerhoets, A. J., & Van Heck, G. L. (1999). Elevated blood pressure and self-reported symptom complaints, daily hassles, and defensiveness. *International journal of behavioral medicine, 6*, 177-189. https://doi.org/10.1207/s15327558ijbm0602_5
+
+- Purvanova, R. K., & Muros, J. P. (2010). Gender differences in burnout: A meta-analysis. *Journal of vocational behavior, 77*(2), 168-185. https://doi.org/10.1016/j.jvb.2010.04.006
+
+- Sandberg, K., & Ji, H. (2012). Sex differences in primary hypertension. *Biology of sex differences, 3*(1), 1-21. https://doi.org/10.1186/2042-6410-3-7
+
+- Seidler, A., Thinschmidt, M., Deckert, S., Then, F., Hegewald, J., Nieuwenhuijsen, K., & Riedel-Heller, S. G. (2014). The role of psychosocial working conditions on burnout and its core component emotional exhaustion–a systematic review. *Journal of occupational medicine and toxicology, 9*(1), 1-13.
+
+- Spector, P. E. (2021). Mastering the use of control variables: The hierarchical iterative control (HIC) approach. *Journal of Business and Psychology, 36*(5), 737-750. https://doi.org/10.1007/s10869-020-09709-0
+
+- Virtanen, M., Ferrie, J. E., Gimeno, D., Vahtera, J., Elovainio, M., Singh-Manoux, A., ... & Kivimäki, M. (2009). Long working hours and sleep disturbances: the Whitehall II prospective cohort study. *Sleep, 32*(6), 737-745. https://doi.org/10.1093/sleep/32.6.737
+
+- Virtanen, M., Heikkilä, K., Jokela, M., Ferrie, J. E., Batty, G. D., Vahtera, J., & Kivimäki, M. (2012). Long working hours and coronary heart disease: a systematic review and meta-analysis. *American journal of epidemiology, 176*(7), 586-596. https://doi.org/10.1093/aje/kws139
+
+- Zeng, L. N., Zong, Q. Q., Yang, Y., Zhang, L., Xiang, Y. F., Ng, C. H., ... & Xiang, Y. T. (2020). Gender difference in the prevalence of insomnia: a meta-analysis of observational studies. *Frontiers in Psychiatry, 11*, 577429. https://doi.org/10.3389/fpsyt.2020.577429
+
+<br>
+
+## R packages
