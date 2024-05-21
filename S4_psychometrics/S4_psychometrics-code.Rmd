@@ -614,12 +614,34 @@ The results obtained on the subsample of participants with at least 3 responses 
 
 <br>
 
-### 2.1.4. Reliability {.tabset .tabset-fade .tabset-pills}
+### 2.1.4. Standardized solution {.tabset .tabset-fade .tabset-pills}
+
+Here, we inspect the standardized parameters estimated by the selected models assumin partial cross-level invariance.
 
 #### N = 135
 
-Here, we inspect the level-specific reliability based on the selected MCFA model `metric2.part`, considering coefficients higher than .60 as signs of adequate reliability. We can note that **all measures show adequate reliability at both levels**, with higher estimates for the single-factor measures.
 ```{r }
+standardizedsolution(metric2.part)
+```
+
+#### N = 127
+
+```{r }
+standardizedsolution(metric22.part)
+```
+
+### 2.1.5. Reliability {.tabset .tabset-fade .tabset-pills}
+
+#### N = 135
+
+Here, we inspect the ICC and the level-specific reliability based on the selected MCFA model `metric2.part`, considering coefficients higher than .60 as signs of adequate reliability. We can note that **all measures show adequate reliability at both levels**, with higher estimates for the single-factor measures.
+```{r }
+# ICC
+p <- parameterestimates(metric2.part)
+p[p$label == "bWE",c("est","se")]
+p[p$label == "bWC",c("est","se")]
+
+# Level-specific reliability
 data.frame(measure=c("Total score","Working Excessively","Working compulsively"),
            omega_w=c(MCFArel(fit=metric2.part,level=1,items=1:6,item.labels=WHLSM),
                      MCFArel(fit=metric2.part,level=1,items=c(1,3,5),item.labels=WE),
@@ -635,6 +657,12 @@ data.frame(measure=c("Total score","Working Excessively","Working compulsively")
 
 Results are highly similar to those obtained with the full sample.
 ```{r }
+# ICC
+p <- parameterestimates(metric22.part)
+p[p$label == "bWE",c("est","se")]
+p[p$label == "bWC",c("est","se")]
+
+# Level-specific reliability
 data.frame(measure=c("Total score","Working Excessively","Working compulsively"),
            omega_w=c(MCFArel(fit=metric22.part,level=1,items=1:6,item.labels=WHLSM),
                      MCFArel(fit=metric22.part,level=1,items=c(1,3,5),item.labels=WE),
